@@ -1,0 +1,36 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "onebitllm"
+version = "0.1.0"
+description = "High-performance 1-bit quantized LLM engine"
+readme = "README.md"
+license = "LicenseRef-OneBitLLM-Research-Only-1.0"
+license-files = ["LICENSE"]
+authors = [{name = "OneBitLLM Team"}]
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "numpy>=1.19.0",
+    "pydantic>=2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/onebitllm"
+Repository = "https://github.com/yourusername/onebitllm.git"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "onebitllm"
+manifest-path = "crates/onebitllm-python/Cargo.toml"

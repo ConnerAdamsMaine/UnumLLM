@@ -1,0 +1,18 @@
+[package]
+name = "onebitllm-cli"
+version.workspace = true
+edition.workspace = true
+license-file = "../../LICENSE"
+description = "CLI for 1-bit quantized LLM training, quantization, and inference"
+
+[[bin]]
+name = "onebitllm"
+path = "src/main.rs"
+
+[dependencies]
+onebitllm-core = { path = "../onebitllm-core", features = ["serde"] }
+clap = { workspace = true }
+anyhow = { workspace = true }
+env_logger = { workspace = true }
+indicatif = { workspace = true }
+log = { workspace = true }

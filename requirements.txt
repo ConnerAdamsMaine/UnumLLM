@@ -1,0 +1,2 @@
+# No third-party Python runtime dependencies are required for the repo-root frontend.
+# Build/install the Rust engine separately from Engine/ when needed.

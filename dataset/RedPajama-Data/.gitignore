@@ -1,0 +1,32 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.DS_Store
+
+# data folders
+data/*
+!data/.gitkeep
+
+# notebooks
+notebooks/*
+.ipynb_checkpoints
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ides
+.idea/
+.vscode/
+
+# distribution
+*.egg-info/
+dist/
+build/

@@ -1,0 +1,6 @@
+include README.md
+include LICENSE
+include PACKAGE_GUIDE.md
+recursive-include crates *.rs Cargo.toml
+recursive-include docs *
+recursive-include python *.py

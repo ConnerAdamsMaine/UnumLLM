@@ -1,0 +1,78 @@
+OneBitLLM Research Review Only License 1.0
+
+Copyright (c) 2026 OneBitLLM Team. All rights reserved.
+
+1. Definitions
+
+"Software" means all source code, binaries, model artifacts, checkpoints,
+weights, configurations, scripts, tests, documentation, and other materials
+made available in this repository or distribution.
+
+"Research Review" means personally reading and discussing the unmodified
+Software for non-commercial academic, scientific, or technical analysis,
+without operational use of the Software and without making copies except for
+transient technical copies automatically created solely to render the Software
+for viewing.
+
+2. Limited Permission
+
+Subject to the terms of this license, the Licensor grants you a personal,
+revocable, non-exclusive, non-transferable, non-sublicensable permission to
+access and visually inspect the unmodified Software solely for Research Review.
+
+3. No Use
+
+You may not use the Software for any functional, operational, internal,
+external, commercial, or production purpose. Without limitation, you may not
+run, compile, install, execute, benchmark, test, train, fine-tune, evaluate,
+host, deploy, offer as a service, or otherwise make practical use of the
+Software.
+
+4. No Reproduction, Distribution, or Public Sharing
+
+Except for transient technical copies automatically created solely to display
+the Software to you, you may not copy, reproduce, download, clone, fork,
+mirror, archive, upload, transmit, redistribute, publish, sublicense, sell,
+lend, lease, or otherwise make the Software available to any other person or
+system.
+
+5. No Modification or Derivative Works
+
+You may not modify, adapt, translate, arrange, merge, transform, create
+derivative works of, or incorporate any portion of the Software into any other
+software, dataset, model, service, or work.
+
+6. No Intellectual Property Grants
+
+No rights or licenses are granted under any copyright, patent, trade secret,
+trademark, publicity, or other intellectual property right except the limited
+permission expressly stated above. All rights not expressly granted are
+reserved.
+
+7. Platform Terms and Mandatory Exceptions
+
+If the Software is hosted on a third-party platform, any platform-native access
+rights or legally non-waivable exceptions that apply do not create any broader
+license from the Licensor. Nothing in this license limits rights that cannot
+lawfully be excluded under applicable law.
+
+8. Termination
+
+This license terminates automatically if you breach any term of it. Upon
+termination, you must stop accessing the Software and destroy any copies in
+your possession or control, except to the extent retention is required by law
+or unavoidable under platform or system operation.
+
+9. No Warranty; Limitation of Liability
+
+THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE," WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING ANY WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, TITLE, NONINFRINGEMENT, OR ACCURACY. TO THE MAXIMUM
+EXTENT PERMITTED BY LAW, THE LICENSOR WILL NOT BE LIABLE FOR ANY CLAIM,
+DAMAGES, OR OTHER LIABILITY ARISING FROM OR RELATED TO THE SOFTWARE OR THIS
+LICENSE.
+
+10. Requests for Other Rights
+
+Any use beyond the narrow permission above requires the Licensor's prior
+written permission.

@@ -1,0 +1,47 @@
+# Rust build outputs
+target/
+*.d
+*.rlib
+*.rmeta
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.venv/
+venv/
+.env
+.env.*
+.python-version
+
+# Testing corpus
+corpora/
+corpora/*
+
+# Packaging artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+.maturin/
+
+# Local model outputs
+checkpoints/
+output/
+
+# Coverage and notebook noise
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+
+# Editor and OS files
+.DS_Store
+.claude/
+.idea/
+.vscode/
