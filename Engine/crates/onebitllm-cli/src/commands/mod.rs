@@ -1,6 +1,8 @@
 pub mod train;
 pub mod quantize;
 pub mod generate;
+pub mod bigram;
+pub mod benchmark;
 
 use clap::Subcommand;
 
@@ -12,6 +14,8 @@ pub enum Command {
     Quantize(quantize::QuantizeArgs),
     /// Generate text from a trained model.
     Generate(generate::GenerateArgs),
+    /// Benchmark deployed model latency and throughput on real prompts.
+    Benchmark(benchmark::BenchmarkArgs),
 }
 
 pub fn run(cmd: Command) -> anyhow::Result<()> {
@@ -19,5 +23,6 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         Command::Train(args) => train::run(args),
         Command::Quantize(args) => quantize::run(args),
         Command::Generate(args) => generate::run(args),
+        Command::Benchmark(args) => benchmark::run(args),
     }
 }

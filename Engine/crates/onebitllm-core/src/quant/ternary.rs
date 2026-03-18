@@ -55,6 +55,14 @@ impl TernaryWeight {
             TernaryWeight::Zero
         }
     }
+
+    /// Quantize to unit ternary using a fixed threshold.
+    ///
+    /// Values > threshold -> +1, < -threshold -> -1, else -> 0.
+    #[inline]
+    pub fn quantize_unit(value: f32, threshold: f32) -> Self {
+        Self::quantize(value, threshold)
+    }
 }
 
 impl From<TernaryWeight> for f32 {
@@ -99,6 +107,14 @@ pub fn round_clip_quantize(weights: &[f32], gamma: f32) -> Vec<TernaryWeight> {
     weights
         .iter()
         .map(|&w| TernaryWeight::quantize(w, gamma))
+        .collect()
+}
+
+/// Quantize an f32 slice to unit ternary {-1, 0, +1} with a fixed threshold.
+pub fn unit_quantize(weights: &[f32], threshold: f32) -> Vec<TernaryWeight> {
+    weights
+        .iter()
+        .map(|&w| TernaryWeight::quantize_unit(w, threshold))
         .collect()
 }
 
@@ -165,5 +181,15 @@ mod tests {
         assert_eq!(ternary[0], TernaryWeight::Pos);
         assert_eq!(ternary[1], TernaryWeight::Neg);
         assert_eq!(ternary[2], TernaryWeight::Zero);
+    }
+
+    #[test]
+    fn test_unit_quantize() {
+        let weights = vec![0.8, -0.8, 0.1, -0.1];
+        let ternary = unit_quantize(&weights, 0.5);
+        assert_eq!(ternary[0], TernaryWeight::Pos);
+        assert_eq!(ternary[1], TernaryWeight::Neg);
+        assert_eq!(ternary[2], TernaryWeight::Zero);
+        assert_eq!(ternary[3], TernaryWeight::Zero);
     }
 }

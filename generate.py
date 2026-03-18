@@ -21,6 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--device", default="cpu")
     parser.add_argument("--stream", action=argparse.BooleanOptionalAction, default=True)
     return parser
 
@@ -37,6 +38,7 @@ def build_generate_job(args: argparse.Namespace) -> GenerateCommandConfig:
         top_p=args.top_p,
         repetition_penalty=args.repetition_penalty,
         seed=args.seed,
+        device=args.device,
         stream=args.stream,
     )
 

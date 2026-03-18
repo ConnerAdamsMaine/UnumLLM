@@ -11,6 +11,7 @@ from typing import Any
 
 SUPPORTED_ACTIVATIONS = ("gelu", "mish", "relu", "silu", "swiglu")
 SUPPORTED_POSITIONAL_ENCODINGS = ("alibi", "learned", "rope")
+SUPPORTED_WEIGHT_FORMATS = ("fp32", "ternary")
 
 
 @dataclass(slots=True)
@@ -31,6 +32,8 @@ class RustModelConfig:
     rope_theta: float = 10000.0
     use_bias: bool = False
     quant_group_size: int = 0
+    weight_format: str = "ternary"
+    training_weight_format: str = "ternary"
     metadata: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -88,6 +91,17 @@ class RustModelConfig:
                 f"(got {self.quant_group_size})"
             )
 
+        if self.weight_format not in SUPPORTED_WEIGHT_FORMATS:
+            supported = ", ".join(SUPPORTED_WEIGHT_FORMATS)
+            raise ValueError(f"weight_format must be one of {supported} (got {self.weight_format!r})")
+
+        if self.training_weight_format not in SUPPORTED_WEIGHT_FORMATS:
+            supported = ", ".join(SUPPORTED_WEIGHT_FORMATS)
+            raise ValueError(
+                "training_weight_format must be one of "
+                f"{supported} (got {self.training_weight_format!r})"
+            )
+
     def save_json(self, path: str | Path) -> Path:
         self.validate()
         output = Path(path).expanduser()
@@ -120,6 +134,12 @@ class TrainCommandConfig:
     log_every: int = 10
     seed: int | None = None
     resume: str | None = None
+    teacher_model: str | None = None
+    eval_data: str | None = None
+    train_weight_format: str = "same-as-config"
+    save_weight_format: str = "same-as-train"
+    distill_alpha: float = 0.0
+    distill_temperature: float = 1.0
 
     def build_args(self, config_path: str | Path) -> list[str]:
         args = [
@@ -153,6 +173,14 @@ class TrainCommandConfig:
             args.extend(["--seed", str(self.seed)])
         if self.resume:
             args.extend(["--resume", self.resume])
+        if self.teacher_model:
+            args.extend(["--teacher-model", self.teacher_model])
+        if self.eval_data:
+            args.extend(["--eval-data", self.eval_data])
+        args.extend(["--train-weight-format", self.train_weight_format])
+        args.extend(["--save-weight-format", self.save_weight_format])
+        args.extend(["--distill-alpha", str(self.distill_alpha)])
+        args.extend(["--distill-temperature", str(self.distill_temperature)])
         return args
 
 
@@ -168,6 +196,7 @@ class GenerateCommandConfig:
     top_p: float = 1.0
     repetition_penalty: float = 1.0
     seed: int | None = None
+    device: str = "cpu"
     stream: bool = True
 
     def build_args(self) -> list[str]:
@@ -187,11 +216,12 @@ class GenerateCommandConfig:
             str(self.top_p),
             "--repetition-penalty",
             str(self.repetition_penalty),
+            "--device",
+            self.device,
         ]
         if self.seed is not None:
             args.extend(["--seed", str(self.seed)])
-        if self.stream:
-            args.append("--stream")
+        args.extend(["--stream", "true" if self.stream else "false"])
         return args
 
 
@@ -213,6 +243,8 @@ def build_model_config_from_args(args: argparse.Namespace) -> RustModelConfig:
         rope_theta=args.rope_theta,
         use_bias=args.use_bias,
         quant_group_size=args.quant_group_size,
+        weight_format=args.weight_format,
+        training_weight_format=args.training_weight_format,
     )
     config.validate()
     return config
@@ -240,6 +272,12 @@ def add_model_config_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--rope-theta", type=float, default=defaults.rope_theta)
     parser.add_argument("--use-bias", action=argparse.BooleanOptionalAction, default=defaults.use_bias)
     parser.add_argument("--quant-group-size", type=int, default=defaults.quant_group_size)
+    parser.add_argument("--weight-format", default=defaults.weight_format, choices=SUPPORTED_WEIGHT_FORMATS)
+    parser.add_argument(
+        "--training-weight-format",
+        default=defaults.training_weight_format,
+        choices=SUPPORTED_WEIGHT_FORMATS,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

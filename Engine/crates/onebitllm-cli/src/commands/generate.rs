@@ -1,5 +1,10 @@
 use anyhow::bail;
+use clap::ArgAction;
 use clap::Args;
+
+use onebitllm_core::backend::{BackendKind, create_backend};
+
+use super::bigram;
 
 /// Arguments for the `generate` subcommand.
 #[derive(Args)]
@@ -36,8 +41,12 @@ pub struct GenerateArgs {
     #[arg(long)]
     pub seed: Option<u64>,
 
+    /// Execution device/backend (`cpu` or `rocm`).
+    #[arg(long, default_value = "cpu")]
+    pub device: String,
+
     /// Stream output token by token.
-    #[arg(long, default_value_t = true)]
+    #[arg(long, default_value_t = true, action = ArgAction::Set)]
     pub stream: bool,
 }
 
@@ -46,6 +55,7 @@ pub fn run(args: GenerateArgs) -> anyhow::Result<()> {
     log::info!("  Model: {}", args.model);
     log::info!("  Max tokens: {}", args.max_tokens);
     log::info!("  Temperature: {}", args.temperature);
+    log::info!("  Device: {}", args.device);
 
     // Check model file exists
     if !std::path::Path::new(&args.model).exists() {
@@ -67,14 +77,37 @@ pub fn run(args: GenerateArgs) -> anyhow::Result<()> {
 
     let _gen_config = onebitllm_core::infer::GenerateConfig {
         max_new_tokens: args.max_tokens,
-        sampling: _sampling,
+        sampling: _sampling.clone(),
         stop_tokens: Vec::new(),
     };
 
+    let model_path = std::path::Path::new(&args.model);
+    if let Ok(model) = bigram::load_bigram_model(model_path) {
+        let config = &model.config;
+        if bigram::is_bigram_architecture(&config.architecture) {
+            let backend_kind = BackendKind::parse(&args.device)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let backend = create_backend(backend_kind)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let output = bigram::generate_bigram_loaded(
+                &model,
+                &args.prompt,
+                args.max_tokens,
+                _sampling,
+                args.stream,
+                backend.as_ref(),
+            )?;
+            if !args.stream {
+                println!("{output}");
+            }
+            return Ok(());
+        }
+    }
+
     bail!(
         "The Rust CLI can parse generation settings, but model/tokenizer loading and the real \
-generation pipeline are still unimplemented. Prompt was accepted, but no executable inference \
-path exists yet for `{}`.",
+generation pipeline are still unimplemented for this model. Real execution exists today only for \
+bigram OBM models. Prompt was accepted, but no executable inference path exists yet for `{}`.",
         args.model
     )
 }

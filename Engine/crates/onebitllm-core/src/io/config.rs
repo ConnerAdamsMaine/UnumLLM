@@ -42,6 +42,10 @@ pub struct ModelConfig {
     pub use_bias: bool,
     /// Quantization group size (0 for per-tensor).
     pub quant_group_size: usize,
+    /// Stored/runtime weight format ("fp32" or "ternary").
+    pub weight_format: String,
+    /// Preferred training-time weight format ("fp32" or "ternary").
+    pub training_weight_format: String,
     /// Additional arbitrary key-value metadata.
     pub metadata: HashMap<String, String>,
 }
@@ -63,6 +67,8 @@ impl Default for ModelConfig {
             rope_theta: 10000.0,
             use_bias: false,
             quant_group_size: 0,
+            weight_format: "ternary".into(),
+            training_weight_format: "ternary".into(),
             metadata: HashMap::new(),
         }
     }
@@ -99,7 +105,12 @@ impl ModelConfig {
         s.push_str(&format!("  \"positional_encoding\": {},\n", json_str(&self.positional_encoding)));
         s.push_str(&format!("  \"rope_theta\": {},\n", self.rope_theta));
         s.push_str(&format!("  \"use_bias\": {},\n", self.use_bias));
-        s.push_str(&format!("  \"quant_group_size\": {}", self.quant_group_size));
+        s.push_str(&format!("  \"quant_group_size\": {},\n", self.quant_group_size));
+        s.push_str(&format!("  \"weight_format\": {},\n", json_str(&self.weight_format)));
+        s.push_str(&format!(
+            "  \"training_weight_format\": {}",
+            json_str(&self.training_weight_format)
+        ));
 
         if !self.metadata.is_empty() {
             s.push_str(",\n  \"metadata\": {\n");
@@ -166,6 +177,12 @@ impl ModelConfig {
         if let Some(v) = extract_json_usize(s, "quant_group_size") {
             config.quant_group_size = v;
         }
+        if let Some(v) = extract_json_str(s, "weight_format") {
+            config.weight_format = v;
+        }
+        if let Some(v) = extract_json_str(s, "training_weight_format") {
+            config.training_weight_format = v;
+        }
 
         // Parse metadata object (simple flat string->string)
         if let Some(meta_start) = s.find("\"metadata\"") {
@@ -227,6 +244,11 @@ impl ModelConfig {
         s.push_str(&format!("rope_theta: {}\n", self.rope_theta));
         s.push_str(&format!("use_bias: {}\n", self.use_bias));
         s.push_str(&format!("quant_group_size: {}\n", self.quant_group_size));
+        s.push_str(&format!("weight_format: {}\n", &self.weight_format));
+        s.push_str(&format!(
+            "training_weight_format: {}\n",
+            &self.training_weight_format
+        ));
         if !self.metadata.is_empty() {
             s.push_str("metadata:\n");
             for (k, v) in &self.metadata {
@@ -239,6 +261,16 @@ impl ModelConfig {
     /// Compute the head dimension.
     pub fn head_dim(&self) -> usize {
         self.hidden_size / self.num_attention_heads
+    }
+
+    /// Whether the config stores ternary (-1/0/+1) weights for runtime.
+    pub fn uses_ternary_runtime(&self) -> bool {
+        self.weight_format.eq_ignore_ascii_case("ternary")
+    }
+
+    /// Whether the config expects ternary (-1/0/+1) weights during training.
+    pub fn uses_ternary_training(&self) -> bool {
+        self.training_weight_format.eq_ignore_ascii_case("ternary")
     }
 }
 
@@ -318,6 +350,8 @@ mod tests {
         assert_eq!(config.hidden_size, 768);
         assert_eq!(config.num_layers, 12);
         assert_eq!(config.head_dim(), 64);
+        assert_eq!(config.weight_format, "ternary");
+        assert_eq!(config.training_weight_format, "ternary");
     }
 
     #[test]
@@ -337,6 +371,8 @@ mod tests {
             rope_theta: 500000.0,
             use_bias: true,
             quant_group_size: 64,
+            weight_format: "fp32".into(),
+            training_weight_format: "ternary".into(),
             metadata: HashMap::new(),
         };
 
@@ -356,6 +392,8 @@ mod tests {
         assert_eq!(loaded.positional_encoding, "alibi");
         assert!(loaded.use_bias);
         assert_eq!(loaded.quant_group_size, 64);
+        assert_eq!(loaded.weight_format, "fp32");
+        assert_eq!(loaded.training_weight_format, "ternary");
     }
 
     #[test]

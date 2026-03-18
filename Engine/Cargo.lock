@@ -783,7 +783,9 @@ dependencies = [
  "env_logger",
  "indicatif",
  "log",
+ "ndarray",
  "onebitllm-core",
+ "rand 0.8.5",
 ]
 
 [[package]]

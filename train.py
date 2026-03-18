@@ -31,6 +31,8 @@ MODEL_CONFIG_FLAGS = (
     "--use-bias",
     "--no-use-bias",
     "--quant-group-size",
+    "--weight-format",
+    "--training-weight-format",
 )
 
 
@@ -52,6 +54,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-every", type=int, default=10)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--teacher-model", default=None)
+    parser.add_argument("--eval-data", default=None)
+    parser.add_argument(
+        "--train-weight-format",
+        default="same-as-config",
+        choices=("same-as-config", "fp32", "ternary"),
+    )
+    parser.add_argument(
+        "--save-weight-format",
+        default="same-as-train",
+        choices=("same-as-train", "fp32", "ternary"),
+    )
+    parser.add_argument("--distill-alpha", type=float, default=0.0)
+    parser.add_argument("--distill-temperature", type=float, default=1.0)
     add_model_config_arguments(parser)
     return parser
 
@@ -84,6 +100,14 @@ def validate_train_inputs(job: TrainCommandConfig, config_path: str | Path) -> P
         resume_path = Path(job.resume).expanduser()
         if not resume_path.exists():
             raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
+    if job.teacher_model:
+        teacher_path = Path(job.teacher_model).expanduser()
+        if not teacher_path.exists():
+            raise FileNotFoundError(f"Teacher model not found: {teacher_path}")
+    if job.eval_data:
+        eval_path = Path(job.eval_data).expanduser()
+        if not eval_path.exists():
+            raise FileNotFoundError(f"Evaluation corpus not found: {eval_path}")
 
     return config_file
 
@@ -122,6 +146,12 @@ def build_train_job(args: argparse.Namespace) -> TrainCommandConfig:
         log_every=args.log_every,
         seed=args.seed,
         resume=args.resume,
+        teacher_model=args.teacher_model,
+        eval_data=args.eval_data,
+        train_weight_format=args.train_weight_format,
+        save_weight_format=args.save_weight_format,
+        distill_alpha=args.distill_alpha,
+        distill_temperature=args.distill_temperature,
     )
 
 

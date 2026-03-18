@@ -45,7 +45,7 @@ python corpus.py --preset tinyshakespeare
 python engine_client.py status
 ```
 
-The status output reports the selected binary, whether it is stale relative to local Rust source edits, and whether `train`, `generate`, and `quantize` are real commands or validate-only stubs.
+The status output reports the selected binary, whether it is stale relative to local Rust source edits, and whether `train`, `generate`, `quantize`, and `benchmark` are real commands or validate-only stubs.
 
 ## Write A Rust Model Config
 
@@ -81,6 +81,25 @@ python train.py \
   --num-attention-heads 12
 ```
 
+Teacher-guided adaptation for the bigram path:
+
+```bash
+python train.py \
+  --data corpora/tinyshakespeare.txt \
+  --output output/student \
+  --teacher-model output/teacher/model.obm \
+  --distill-alpha 0.5 \
+  --distill-temperature 1.5 \
+  --eval-data corpora/tinyshakespeare.txt \
+  --architecture bigram \
+  --hidden-size 256 \
+  --num-layers 1 \
+  --num-attention-heads 1 \
+  --num-kv-heads 1 \
+  --intermediate-size 256 \
+  --vocab-size 256
+```
+
 ## Run Rust Generate Through Python
 
 ```bash
@@ -92,5 +111,8 @@ python generate.py \
 ## Notes
 
 - The Rust CLI and bindings are still incomplete in parts. The Python frontend does not mask that; it just forwards the real Rust output.
-- `train` currently validates inputs and config, but it does not write checkpoints or a runnable `.obm` model yet.
+- The Rust CLI now has a real end-to-end path for `architecture = "bigram"` with explicit `fp32` and `ternary` train/save modes, teacher distillation, deployed-model eval, and workload benchmarking. Larger architectures still have validation-only train/generate surfaces.
+- `train` can now write runnable `.obm` models for the byte-level bigram path. Other architectures still stop after validation.
+- `quantize` can convert bigram `.obm` models between `fp32` and `ternary` weight formats and report conversion/eval drift.
+- `benchmark` measures cold load, p50/p95/p99 latency, request throughput, and token throughput on real prompts for bigram `.obm` models.
 - The old repo-root Python model/tokenizer/quantization stack was removed on purpose to keep architecture boundaries clear.

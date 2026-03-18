@@ -42,6 +42,18 @@ impl PackedTernary {
         Self { data, len }
     }
 
+    /// Rebuild packed storage from raw u64 words and the logical weight count.
+    pub fn from_raw_parts(data: Vec<u64>, len: usize) -> Result<Self> {
+        let expected_words = len.div_ceil(WEIGHTS_PER_WORD);
+        if data.len() != expected_words {
+            return Err(OneBitError::Config(format!(
+                "packed ternary word count mismatch: expected {expected_words}, got {}",
+                data.len()
+            )));
+        }
+        Ok(Self { data, len })
+    }
+
     /// Quantize an f32 slice using absmean and pack the result.
     ///
     /// Returns `(packed_weights, gamma_scale)`.

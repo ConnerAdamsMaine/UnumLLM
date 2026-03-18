@@ -148,6 +148,10 @@ pub struct PyModelConfig {
     pub max_seq_len: usize,
     #[pyo3(get, set)]
     pub activation: String,
+    #[pyo3(get, set)]
+    pub weight_format: String,
+    #[pyo3(get, set)]
+    pub training_weight_format: String,
 }
 
 #[pymethods]
@@ -163,6 +167,8 @@ impl PyModelConfig {
         vocab_size=32000,
         max_seq_len=2048,
         activation="silu".to_string(),
+        weight_format="ternary".to_string(),
+        training_weight_format="ternary".to_string(),
     ))]
     fn new(
         architecture: String,
@@ -174,6 +180,8 @@ impl PyModelConfig {
         vocab_size: usize,
         max_seq_len: usize,
         activation: String,
+        weight_format: String,
+        training_weight_format: String,
     ) -> Self {
         Self {
             architecture,
@@ -185,6 +193,8 @@ impl PyModelConfig {
             vocab_size,
             max_seq_len,
             activation,
+            weight_format,
+            training_weight_format,
         }
     }
 
@@ -229,6 +239,8 @@ impl PyModelConfig {
             vocab_size: self.vocab_size,
             max_seq_len: self.max_seq_len,
             activation: self.activation.clone(),
+            weight_format: self.weight_format.clone(),
+            training_weight_format: self.training_weight_format.clone(),
             ..Default::default()
         }
     }
@@ -244,6 +256,8 @@ impl PyModelConfig {
             vocab_size: config.vocab_size,
             max_seq_len: config.max_seq_len,
             activation: config.activation.clone(),
+            weight_format: config.weight_format.clone(),
+            training_weight_format: config.training_weight_format.clone(),
         }
     }
 }

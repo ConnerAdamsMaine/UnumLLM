@@ -1,6 +1,8 @@
 use anyhow::bail;
 use clap::Args;
 
+use super::bigram;
+
 /// Arguments for the `train` subcommand.
 #[derive(Args)]
 pub struct TrainArgs {
@@ -59,6 +61,30 @@ pub struct TrainArgs {
     /// Resume from checkpoint path.
     #[arg(long)]
     pub resume: Option<String>,
+
+    /// Optional teacher bigram model for distillation.
+    #[arg(long)]
+    pub teacher_model: Option<String>,
+
+    /// Optional evaluation corpus for deployed-model metrics.
+    #[arg(long)]
+    pub eval_data: Option<String>,
+
+    /// Training-time weight format (`fp32` or `ternary`).
+    #[arg(long, default_value = "same-as-config")]
+    pub train_weight_format: String,
+
+    /// Output weight format (`same-as-train`, `fp32`, or `ternary`).
+    #[arg(long, default_value = "same-as-train")]
+    pub save_weight_format: String,
+
+    /// Blend factor for teacher distillation loss (0.0-1.0).
+    #[arg(long, default_value_t = 0.0)]
+    pub distill_alpha: f32,
+
+    /// Temperature used when matching teacher next-token distributions.
+    #[arg(long, default_value_t = 1.0)]
+    pub distill_temperature: f32,
 }
 
 pub fn run(args: TrainArgs) -> anyhow::Result<()> {
@@ -104,15 +130,76 @@ pub fn run(args: TrainArgs) -> anyhow::Result<()> {
             bail!("Resume checkpoint not found: {resume}");
         }
     }
+    if let Some(teacher_model) = &args.teacher_model {
+        if !std::path::Path::new(teacher_model).exists() {
+            bail!("Teacher model not found: {teacher_model}");
+        }
+    }
+    if let Some(eval_data) = &args.eval_data {
+        if !std::path::Path::new(eval_data).exists() {
+            bail!("Evaluation corpus not found: {eval_data}");
+        }
+    }
+    if !(0.0..=1.0).contains(&args.distill_alpha) {
+        bail!("--distill-alpha must be between 0.0 and 1.0");
+    }
+    if args.distill_temperature <= 0.0 {
+        bail!("--distill-temperature must be greater than 0");
+    }
+
+    let train_weight_format = if args.train_weight_format.eq_ignore_ascii_case("same-as-config") {
+        _model_config.training_weight_format.clone()
+    } else {
+        args.train_weight_format.clone()
+    };
+    let save_weight_format =
+        super::bigram::resolve_save_weight_format(&train_weight_format, &args.save_weight_format)?;
+
+    if bigram::is_bigram_architecture(&_model_config.architecture) {
+        let output_model = bigram::train_bigram(
+            &_model_config,
+            bigram::BigramTrainArgs {
+                corpus_path: std::path::Path::new(&args.data),
+                output_dir: std::path::Path::new(&args.output),
+                resume_path: args.resume.as_deref().map(std::path::Path::new),
+                teacher_model_path: args.teacher_model.as_deref().map(std::path::Path::new),
+                eval_path: args.eval_data.as_deref().map(std::path::Path::new),
+                epochs: args.epochs,
+                batch_size: args.batch_size,
+                lr: args.lr as f32,
+                weight_decay: args.weight_decay as f32,
+                max_grad_norm: args.max_grad_norm as f32,
+                warmup_steps: args.warmup_steps,
+                max_steps: args.max_steps,
+                save_every: args.save_every,
+                log_every: args.log_every,
+                seed: args.seed,
+                train_weight_format: &train_weight_format,
+                save_weight_format: &save_weight_format,
+                distill_alpha: args.distill_alpha,
+                distill_temperature: args.distill_temperature,
+            },
+        )?;
+        log::info!(
+            "Finished real bigram training with train_weight_format={} save_weight_format={}. Model written to {}",
+            train_weight_format,
+            save_weight_format,
+            output_model.display()
+        );
+        return Ok(());
+    }
 
     bail!(
         "The Rust CLI can parse the training config, but end-to-end training is still unimplemented. \
 Validated inputs:\n  data: {}\n  config: {}\n  output: {}\n\
-Expected missing pieces: data loading/tokenization, model assembly, optimizer/scheduler wiring, \
-checkpoint writing, and a real training loop.\n\
+Requested train_weight_format: {}\n  requested save_weight_format: {}\n\
+Real execution exists today only for `architecture = bigram`. Other architectures are still missing: \
+data loading/tokenization, model assembly, optimizer/scheduler wiring, checkpoint writing, and a real training loop.\n\
 No checkpoints or model files were written.",
         args.data,
         args.config,
-        args.output
+        args.output,
+        train_weight_format,
+        save_weight_format
     )
 }

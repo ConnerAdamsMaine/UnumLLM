@@ -22,6 +22,32 @@ pub struct PackedTensor {
 }
 
 impl PackedTensor {
+    /// Rebuild a packed tensor from serialized pieces.
+    pub fn from_parts(
+        packed: PackedTernary,
+        shape: Vec<usize>,
+        quant_params: QuantParams,
+    ) -> Result<Self> {
+        let total_elements: usize = shape.iter().product();
+        if packed.len() != total_elements {
+            return Err(OneBitError::ShapeMismatch {
+                expected: vec![total_elements],
+                got: vec![packed.len()],
+            });
+        }
+        if quant_params.original_shape != shape {
+            return Err(OneBitError::ShapeMismatch {
+                expected: shape,
+                got: quant_params.original_shape,
+            });
+        }
+        Ok(Self {
+            packed,
+            shape: quant_params.original_shape.clone(),
+            quant_params,
+        })
+    }
+
     /// Create from an f32 ndarray by quantizing.
     pub fn from_ndarray(arr: &Array<f32, IxDyn>, config: &QuantConfig) -> Self {
         let shape = arr.shape().to_vec();
@@ -68,6 +94,55 @@ impl PackedTensor {
     /// Create from a 2D f32 array (most common: weight matrices).
     pub fn from_array2(arr: &Array2<f32>, config: &QuantConfig) -> Self {
         Self::from_ndarray(&arr.clone().into_dyn(), config)
+    }
+
+    /// Create from an ndarray that already contains exact unit ternary values.
+    ///
+    /// This keeps the logical values at {-1, 0, +1} by forcing unit scales
+    /// instead of recomputing absmean scales from the data.
+    pub fn from_unit_ternary_ndarray(
+        arr: &Array<f32, IxDyn>,
+        granularity: QuantGranularity,
+    ) -> Result<Self> {
+        let shape = arr.shape().to_vec();
+        let flat: Vec<f32> = arr.iter().copied().collect();
+        let ternary: Vec<TernaryWeight> = flat
+            .iter()
+            .map(|&value| match value {
+                v if (v - 1.0).abs() < 1e-6 => Ok(TernaryWeight::Pos),
+                v if (v + 1.0).abs() < 1e-6 => Ok(TernaryWeight::Neg),
+                v if v.abs() < 1e-6 => Ok(TernaryWeight::Zero),
+                _ => Err(OneBitError::Quantization(format!(
+                    "expected exact unit ternary values, found {value}"
+                ))),
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let scale_count = match granularity {
+            QuantGranularity::PerTensor => 1,
+            QuantGranularity::PerChannel => shape.first().copied().ok_or_else(|| {
+                OneBitError::Quantization("per-channel ternary packing requires a non-empty shape".into())
+            })?,
+            QuantGranularity::PerGroup(group_size) => {
+                if group_size == 0 {
+                    return Err(OneBitError::Quantization(
+                        "per-group ternary packing requires group_size > 0".into(),
+                    ));
+                }
+                flat.len().div_ceil(group_size)
+            }
+        };
+
+        Ok(Self {
+            packed: PackedTernary::from_ternary_slice(&ternary),
+            shape: shape.clone(),
+            quant_params: QuantParams {
+                scales: vec![1.0; scale_count],
+                zero_points: Vec::new(),
+                original_shape: shape,
+                granularity,
+            },
+        })
     }
 
     /// Dequantize back to f32 ndarray.
@@ -413,6 +488,29 @@ mod tests {
         let config = QuantConfig::per_tensor();
         let packed = PackedTensor::from_array2(&arr, &config);
         assert_eq!(packed.shape(), &[2, 2]);
+    }
+
+    #[test]
+    fn test_from_unit_ternary_ndarray_keeps_unit_scale() {
+        let arr = array![[1.0f32, -1.0], [0.0, 1.0]].into_dyn();
+        let packed = PackedTensor::from_unit_ternary_ndarray(&arr, QuantGranularity::PerTensor)
+            .unwrap();
+        assert_eq!(packed.quant_params().scales, vec![1.0]);
+        assert_eq!(packed.to_ndarray(), arr);
+    }
+
+    #[test]
+    fn test_from_parts_roundtrip() {
+        let arr = array![[1.0f32, -1.0], [0.0, 1.0]].into_dyn();
+        let packed = PackedTensor::from_unit_ternary_ndarray(&arr, QuantGranularity::PerTensor)
+            .unwrap();
+        let rebuilt = PackedTensor::from_parts(
+            packed.packed_data().clone(),
+            packed.shape().to_vec(),
+            packed.quant_params().clone(),
+        )
+        .unwrap();
+        assert_eq!(rebuilt.to_ndarray(), arr);
     }
 
     #[test]

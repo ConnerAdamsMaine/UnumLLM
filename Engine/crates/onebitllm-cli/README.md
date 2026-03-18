@@ -4,7 +4,16 @@ Command-line interface for the Rust OneBitLLM engine.
 
 ## Overview
 
-`onebitllm-cli` exposes the current Rust command surface. At the moment it can validate configs, paths, and sampling/quantization settings, but the end-to-end training, quantization-export, and generation pipelines are still being wired up.
+`onebitllm-cli` is no longer just a validator surface. The current real execution path is the byte-level `bigram` architecture:
+
+- `train`: end-to-end bigram training with `fp32` or `ternary` train/save modes
+- `train`: optional teacher-model distillation plus deployed-model eval reporting
+- `quantize`: bigram `.obm` conversion with packed ternary export and drift metrics
+- `generate`: runnable bigram inference on packed ternary or fp32 `.obm` models
+- `benchmark`: real-prompt latency and throughput measurement
+- `generate` / `benchmark`: explicit `--device cpu|rocm` selection
+
+Larger architectures still validate inputs and fail fast instead of pretending to run.
 
 ## Installation
 
@@ -15,6 +24,12 @@ cargo build --release -p onebitllm-cli
 ./target/release/onebitllm --help
 ```
 
+ROCm-ready build surface:
+
+```bash
+cargo build --release -p onebitllm-cli --features rocm
+```
+
 Or run directly:
 
 ```bash
@@ -23,231 +38,186 @@ cargo run --release --bin onebitllm -- --help
 
 ## Current Status
 
-- `onebitllm train`: validates config/data inputs, then exits with a clear unimplemented error
-- `onebitllm quantize`: validates quantization settings and input path, then exits with a clear unimplemented error
-- `onebitllm generate`: validates model path and generation settings, then exits with a clear unimplemented error
-- No `--device` flag or GPU backend is implemented in the current CLI
+- CPU is the only working backend in-tree today
+- ROCm build plumbing exists behind `--features rocm`, but HIP kernels are still stubbed and fail explicitly
+- Bigram `.obm` runtime supports `fp32` and packed `ternary` weights
+- Ternary export writes real packed tensors plus serialized scale metadata
+- Distillation/eval/benchmark surfaces are currently bigram-only
+- Transformer-style architectures still stop after validation
 
 ## Commands
 
-### Overview
-
-```bash
-onebitllm --help
-```
-
 ### Train
-
-Validate training inputs for the Rust engine.
 
 ```bash
 onebitllm train \
   --config config.json \
   --data dataset/train.txt \
   --output output-dir \
-  --epochs 10 \
-  --batch-size 32
+  --max-steps 256 \
+  --train-weight-format ternary \
+  --save-weight-format ternary
 ```
 
-**Options**:
+Key options:
+
 - `--config <FILE>`: JSON model configuration
-- `--data <FILE>`: Training data path
-- `--output <DIR>`: Output directory
-- `--epochs <N>`: Number of training epochs
-- `--batch-size <N>`: Batch size
-- `--lr <LR>`: Learning rate
-- `--warmup-steps <N>`: Warmup steps
-- `--save-every <N>`: Save interval in steps
-- `--seed <SEED>`: Random seed
-- Current behavior: validates inputs, then returns an unimplemented error without writing checkpoints
+- `--data <PATH>`: training corpus file or directory
+- `--output <DIR>`: output directory for checkpoints and final `model.obm`
+- `--train-weight-format <MODE>`: `same-as-config`, `fp32`, or `ternary`
+- `--save-weight-format <MODE>`: `same-as-train`, `fp32`, or `ternary`
+- `--teacher-model <FILE>`: optional teacher bigram `.obm`
+- `--distill-alpha <FLOAT>`: blend factor from `0.0` to `1.0`
+- `--distill-temperature <FLOAT>`: temperature for teacher matching
+- `--eval-data <PATH>`: optional held-out corpus for deployed-model metrics
+- `--seed <SEED>`: deterministic batch-order seed
+
+Notes:
+
+- Real execution exists today only for `architecture = "bigram"` with `vocab_size = 256`
+- Final logs include deployed loss, perplexity, accuracy, and teacher-retention metrics when a teacher is provided
 
 ### Quantize
 
-Validate post-training quantization settings.
-
 ```bash
 onebitllm quantize \
-  --input pretrained.safetensors \
-  --output quantized.obm \
-  --granularity per-tensor
+  --input teacher/model.obm \
+  --output teacher-ternary.obm \
+  --target-weight-format ternary \
+  --granularity per-group:128 \
+  --eval-data dataset/eval.txt
 ```
 
-**Options**:
-- `--input <FILE>`: Input checkpoint or tensor file
-- `--output <FILE>`: Quantized model save path
-- `--granularity <GRAN>`: `per-tensor`, `per-channel`, or `per-group`
-- `--group-size <N>`: Group size for group-wise quantization (default: 128)
-- Current behavior: validates inputs, then returns an unimplemented error without writing an OBM file
+Key options:
+
+- `--input <FILE>`: input bigram `.obm`
+- `--output <FILE>`: output `.obm`
+- `--target-weight-format <MODE>`: `fp32` or `ternary`
+- `--granularity <GRAN>`: `per-tensor`, `per-channel`, `per-group`, or `per-group:N`
+- `--group-size <N>`: default group size for `per-group`
+- `--eval-data <PATH>`: optional corpus for before/after eval
+
+Notes:
+
+- Ternary export writes packed 2-bit weights, not dense fake ternary `f32`
+- Conversion logs include MSE, mean absolute error, max absolute error, exact-match fraction, and optional eval/retention metrics
 
 ### Generate
 
-Validate generation settings for a model path.
-
 ```bash
 onebitllm generate \
-  --model quantized.obm \
-  --prompt "Hello, the meaning of life is" \
-  --max-tokens 50
+  --model output/model.obm \
+  --prompt "The future of 1-bit models is" \
+  --max-tokens 32 \
+  --stream false
 ```
 
-**Options**:
-- `--model <FILE>`: Path to model checkpoint/container
-- `--prompt <TEXT>`: Input prompt
-- `--max-tokens <N>`: Maximum tokens to generate
-- `--temperature <T>`: Sampling temperature
-- `--top-k <K>`: Top-k sampling cutoff
-- `--top-p <P>`: Nucleus sampling cutoff
-- `--repetition-penalty <P>`: Repetition penalty
-- Current behavior: validates inputs, then returns an unimplemented error without generating text
+Key options:
 
-## Configuration Files
+- `--model <FILE>`: bigram `.obm`
+- `--prompt <TEXT>`: prompt text
+- `--max-tokens <N>`: number of generated bytes
+- `--temperature <T>`: `0.0` for greedy
+- `--top-k <K>` / `--top-p <P>` / `--repetition-penalty <P>`
+- `--seed <SEED>`: deterministic sampling seed
+- `--device <NAME>`: `cpu` or `rocm`
+- `--stream <BOOL>`: `true` or `false`
 
-### Model Configuration (JSON)
+### Benchmark
 
-The current CLI build reads model configs through the Rust JSON loader. YAML is
-not enabled here.
+```bash
+onebitllm benchmark \
+  --model output/model.obm \
+  --prompts-file prompts.txt \
+  --requests 32 \
+  --warmup 4 \
+  --concurrency 4 \
+  --max-tokens 64 \
+  --seed 42
+```
+
+The benchmark command prints:
+
+- `load_ms`
+- `latency_p50_ms`
+- `latency_p95_ms`
+- `latency_p99_ms`
+- `latency_avg_ms`
+- `throughput_req_per_s`
+- `throughput_tok_per_s`
+
+It measures real generation requests against a loaded bigram model rather than synthetic tensor kernels.
+
+## ROCm Readiness
+
+The current tree now has:
+
+- a `rocm` Cargo feature in `onebitllm-core` and `onebitllm-cli`
+- backend/device selection plumbing for runtime commands
+- explicit failure when `--device rocm` is chosen without a ROCm-enabled build
+
+What it still does not have:
+
+- HIP kernels
+- ROCm tensor backend implementations
+- ROCm training support
+- MI300-class runtime validation
+
+## Model Configuration
+
+Bigram execution currently requires a JSON config like:
 
 ```json
 {
-  "architecture": "bitnet-b1.58",
-  "hidden_size": 768,
-  "num_layers": 12,
-  "num_attention_heads": 12,
-  "num_kv_heads": 12,
-  "intermediate_size": 2048,
-  "vocab_size": 32000,
-  "max_seq_len": 2048,
-  "activation": "silu"
+  "architecture": "bigram",
+  "hidden_size": 256,
+  "num_layers": 1,
+  "num_attention_heads": 1,
+  "num_kv_heads": 1,
+  "intermediate_size": 256,
+  "vocab_size": 256,
+  "max_seq_len": 256,
+  "rms_norm_eps": 0.00001,
+  "activation": "silu",
+  "positional_encoding": "rope",
+  "rope_theta": 10000.0,
+  "use_bias": false,
+  "quant_group_size": 0,
+  "weight_format": "fp32",
+  "training_weight_format": "ternary"
 }
 ```
 
-### Training Data
-
-`onebitllm train` currently validates that the `--data` path exists, but it does
-not yet tokenize or stream the dataset. Use a real path so the command can
-validate inputs before it returns its explicit unimplemented error.
-
-## Examples
-
-### Validate a Training Request
-
-```bash
-onebitllm train \
-  --config model.json \
-  --data dataset.txt \
-  --output out \
-  --epochs 3 \
-  --batch-size 2
-```
-
-The command validates the config and paths, then exits with a clear
-unimplemented error. It does not create checkpoints yet.
-
-### Validate Quantization Settings
-
-```bash
-onebitllm quantize \
-  --input pretrained.safetensors \
-  --output quantized.obm \
-  --granularity per-group:128
-```
-
-The command validates the input file and quantization settings, then exits with
-an explicit unimplemented error. It does not write an OBM file yet.
-
-### Validate Generation Settings
-
-```bash
-onebitllm generate \
-  --model quantized.obm \
-  --prompt "The quick brown" \
-  --max-tokens 20 \
-  --temperature 0.7
-```
-
-The command validates the model path and sampling settings, then exits with an
-explicit unimplemented error. It does not load a tokenizer or generate tokens yet.
-
 ## Logging
 
-Control logging verbosity with `RUST_LOG`:
+Control verbosity with `RUST_LOG`:
 
 ```bash
-# Debug level
-RUST_LOG=debug onebitllm train --config config.json --data dataset.txt
-
-# Info level (default)
-RUST_LOG=info onebitllm generate --model model.obm ...
-
-# Only CLI errors
-RUST_LOG=error onebitllm ...
-
-# Specific module
-RUST_LOG=onebitllm_core::nn=debug onebitllm train ...
+RUST_LOG=info onebitllm train --config config.json --data dataset.txt
+RUST_LOG=debug onebitllm quantize --input teacher.obm --output teacher-ternary.obm
+RUST_LOG=error onebitllm benchmark --model output/model.obm --requests 8
 ```
-
-## Performance Tips
-
-- The current CLI is a validator/fail-fast surface, not a benchmarkable runtime
-- Packed ternary hot paths live in `onebitllm-core`; CLI throughput work depends on wiring a real backend and model loader first
-- No GPU, ROCm, or HIP flag exists in the current CLI
 
 ## Troubleshooting
 
-### Expecting Generated Text or Output Files
+### Command Validates But Does Not Run
 
-The current commands validate arguments and then stop on purpose. If you need
-real training, quantization export, or generation, those Rust paths still need
-to be implemented.
+That is expected for non-bigram architectures. The CLI now fails explicitly instead of faking placeholder output.
 
-### Invalid Configuration
+### `--stream false`
 
-Use JSON model configs for `train`:
-```bash
-onebitllm train --config config.json --data dataset.txt
-```
+Use `--stream false` to disable token-by-token printing. The Python wrapper now passes this explicitly.
 
-If you pass `.yaml` or `.yml`, the CLI now rejects it explicitly.
+### YAML Configs
 
-## Dependencies
-
-The CLI depends on:
-- **onebitllm-core**: Core library
-- **clap**: Command-line argument parsing
-- **env_logger**: Logging setup
-- **indicatif**: Progress bars
-- **serde_yaml**: Configuration file parsing
+The CLI train path expects JSON model configs in the current build.
 
 ## Architecture
 
-The CLI delegates to `onebitllm-core`:
-
 ```
-CLI Parser (clap)
+CLI Parser
     ↓
-Argument and path validation
+Bigram execution path or fail-fast validation path
     ↓
-Specialized Handlers (train/quantize/generate)
-    ↓
-Core config/quantization/inference types
-    ↓
-Explicit unimplemented error
+Packed tensor / autograd / OBM runtime pieces in onebitllm-core
 ```
-
-Each command:
-1. Parses arguments
-2. Validates paths and settings
-3. Builds the corresponding Rust-side config objects
-4. Refuses to write placeholder artifacts or fake success output
-
-## Contributing
-
-When adding new commands:
-
-1. Create handler in `commands/` module
-2. Add to `Command` enum in `commands/mod.rs`
-3. Implement error handling and logging
-4. Add progress bars for long-running operations
-5. Include help text with examples
-
-See the main [README.md](../../README.md) for contribution guidelines.

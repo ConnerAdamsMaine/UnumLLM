@@ -37,6 +37,14 @@ impl ComputeBackend for CpuBackend {
         Ok(a2.dot(&b2).into_dyn())
     }
 
+    fn packed_matmul_dense_left_transposed(
+        &self,
+        lhs: &Array<f32, IxDyn>,
+        packed: &PackedTensor,
+    ) -> Result<Array<f32, IxDyn>> {
+        packed.matmul_dense_left_transposed(lhs)
+    }
+
     fn packed_matvec(
         &self,
         packed: &PackedTensor,

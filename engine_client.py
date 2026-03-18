@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
+import json
 import os
 from pathlib import Path
 import shlex
 import shutil
+import struct
 import subprocess
 import tempfile
 from typing import Callable, Sequence
@@ -17,7 +19,7 @@ from typing import Callable, Sequence
 REPO_ROOT = Path(__file__).resolve().parent
 ENGINE_ROOT = REPO_ROOT / "Engine"
 REPO_ENGINE_TARGET = ENGINE_ROOT / "target"
-CAPABILITY_ORDER = ("train", "generate", "quantize")
+CAPABILITY_ORDER = ("train", "generate", "quantize", "benchmark")
 VALIDATE_ONLY_MARKERS = {
     "train": (
         "training config, but end-to-end training is still unimplemented",
@@ -28,9 +30,10 @@ VALIDATE_ONLY_MARKERS = {
         "no executable inference path exists yet",
     ),
     "quantize": (
-        "can validate quantization settings, but model loading and obm export are still unimplemented",
+        "can validate quantization settings, but real conversion is currently implemented only for bigram obm models",
         "no output file was written",
     ),
+    "benchmark": (),
 }
 
 
@@ -162,32 +165,82 @@ def _binary_freshness(binary_path: Path) -> tuple[str, list[str]]:
 def _probe_command_args(command: str, tempdir: Path) -> list[str]:
     if command == "generate":
         model_path = tempdir / "probe-model.obm"
-        model_path.write_text("{}", encoding="utf-8")
+        _write_probe_bigram_obm(model_path)
         return ["generate", "--model", str(model_path), "--prompt", "probe"]
 
     if command == "train":
         data_path = tempdir / "probe-data.txt"
         data_path.write_text("probe\n", encoding="utf-8")
         config_path = tempdir / "probe-config.json"
-        config_path.write_text(
-            (
-                '{"architecture":"bitnet-b1.58","hidden_size":768,"num_layers":12,'
-                '"num_attention_heads":12,"num_kv_heads":12,"intermediate_size":2048,'
-                '"vocab_size":32000,"max_seq_len":2048,"rms_norm_eps":1e-5,'
-                '"activation":"silu","positional_encoding":"rope","rope_theta":10000.0,'
-                '"use_bias":false,"quant_group_size":0}\n'
-            ),
-            encoding="utf-8",
-        )
+        config_path.write_text(json.dumps(_probe_bigram_config()) + "\n", encoding="utf-8")
         return ["train", "--data", str(data_path), "--config", str(config_path)]
 
     if command == "quantize":
-        input_path = tempdir / "probe-model.bin"
-        input_path.write_bytes(b"probe")
+        input_path = tempdir / "probe-model.obm"
+        _write_probe_bigram_obm(input_path)
         output_path = tempdir / "probe-output.obm"
         return ["quantize", "--input", str(input_path), "--output", str(output_path)]
 
+    if command == "benchmark":
+        model_path = tempdir / "probe-model.obm"
+        _write_probe_bigram_obm(model_path)
+        return [
+            "benchmark",
+            "--model",
+            str(model_path),
+            "--prompt",
+            "probe",
+            "--requests",
+            "1",
+            "--warmup",
+            "0",
+            "--max-tokens",
+            "4",
+        ]
+
     raise ValueError(f"Unsupported probe command: {command}")
+
+
+def _probe_bigram_config() -> dict[str, object]:
+    return {
+        "architecture": "bigram",
+        "hidden_size": 256,
+        "num_layers": 1,
+        "num_attention_heads": 1,
+        "num_kv_heads": 1,
+        "intermediate_size": 256,
+        "vocab_size": 256,
+        "max_seq_len": 256,
+        "rms_norm_eps": 1e-5,
+        "activation": "silu",
+        "positional_encoding": "rope",
+        "rope_theta": 10000.0,
+        "use_bias": False,
+        "quant_group_size": 0,
+        "weight_format": "fp32",
+        "training_weight_format": "ternary",
+    }
+
+
+def _write_probe_bigram_obm(path: Path) -> None:
+    config_bytes = (json.dumps(_probe_bigram_config()) + "\n").encode("utf-8")
+    tensor_name = b"bigram.weight"
+    weight_bytes = b"\x00" * (256 * 256 * 4)
+
+    with path.open("wb") as handle:
+        handle.write(b"OBM1")
+        handle.write(struct.pack("<I", 1))
+        handle.write(struct.pack("<Q", len(config_bytes)))
+        handle.write(config_bytes)
+        handle.write(struct.pack("<I", 1))
+        handle.write(struct.pack("<I", len(tensor_name)))
+        handle.write(tensor_name)
+        handle.write(struct.pack("<B", 0))
+        handle.write(struct.pack("<I", 2))
+        handle.write(struct.pack("<Q", 256))
+        handle.write(struct.pack("<Q", 256))
+        handle.write(struct.pack("<Q", len(weight_bytes)))
+        handle.write(weight_bytes)
 
 
 def _detect_missing_command(output: str, command: str) -> bool:
@@ -352,14 +405,14 @@ def translate_engine_output(output: str) -> str | None:
 
     lowered = stripped.lower()
 
-    if "unexpected argument '--no-stream' found" in lowered:
-        return (
-            "This engine build only accepts `--stream`. Disable streaming by omitting the flag, "
-            "or rebuild the Python frontend and Rust CLI together."
-        )
-
     if "rust engine cli not found" in lowered:
         return stripped
+
+    if "rocm backend requested, but this build was compiled without the `rocm` feature" in lowered:
+        return (
+            "This engine binary was built without ROCm support. Rebuild `onebitllm-cli` with "
+            "`--features rocm` before selecting `--device rocm`."
+        )
 
     if "training config, but end-to-end training is still unimplemented" in lowered:
         return (
@@ -373,7 +426,7 @@ def translate_engine_output(output: str) -> str | None:
             "but executable inference is still unimplemented."
         )
 
-    if "can validate quantization settings, but model loading and obm export are still unimplemented" in lowered:
+    if "can validate quantization settings, but real conversion is currently implemented only for bigram obm models" in lowered:
         return (
             "Rust quantize is validate-only in this build. Settings were parsed, "
             "but no quantized OBM file can be written yet."

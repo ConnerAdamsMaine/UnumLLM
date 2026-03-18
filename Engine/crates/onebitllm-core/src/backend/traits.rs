@@ -25,6 +25,13 @@ pub trait ComputeBackend: Send + Sync {
         b: &Array<f32, IxDyn>,
     ) -> Result<Array<f32, IxDyn>>;
 
+    /// Dense matrix (B x K) * packed matrix^T (M x K)^T -> dense (B x M).
+    fn packed_matmul_dense_left_transposed(
+        &self,
+        lhs: &Array<f32, IxDyn>,
+        packed: &PackedTensor,
+    ) -> Result<Array<f32, IxDyn>>;
+
     /// Quantized matvec: packed (M x N) * dense (N,) -> f32 (M,).
     fn packed_matvec(
         &self,

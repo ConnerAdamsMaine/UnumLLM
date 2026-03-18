@@ -113,6 +113,8 @@ class OneBitLLMGui:
         self.vocab_size_var = tk.IntVar(value=model.vocab_size)
         self.max_seq_len_var = tk.IntVar(value=model.max_seq_len)
         self.activation_var = tk.StringVar(value=model.activation)
+        self.weight_format_var = tk.StringVar(value=model.weight_format)
+        self.training_weight_format_var = tk.StringVar(value=model.training_weight_format)
 
         self.train_data_var = tk.StringVar(value=str(REPO_ROOT / "corpora" / "tinyshakespeare.txt"))
         self.train_output_var = tk.StringVar(value=str(REPO_ROOT / "output"))
@@ -128,6 +130,12 @@ class OneBitLLMGui:
         self.train_log_every_var = tk.IntVar(value=10)
         self.train_seed_var = tk.StringVar(value="")
         self.train_resume_var = tk.StringVar(value="")
+        self.train_teacher_model_var = tk.StringVar(value="")
+        self.train_eval_data_var = tk.StringVar(value="")
+        self.train_weight_mode_var = tk.StringVar(value="same-as-config")
+        self.train_save_weight_mode_var = tk.StringVar(value="same-as-train")
+        self.train_distill_alpha_var = tk.DoubleVar(value=0.0)
+        self.train_distill_temperature_var = tk.DoubleVar(value=1.0)
 
     def _build_generate_defaults(self) -> None:
         self.generate_model_var = tk.StringVar(value="")
@@ -137,6 +145,7 @@ class OneBitLLMGui:
         self.generate_top_p_var = tk.DoubleVar(value=1.0)
         self.generate_repetition_penalty_var = tk.DoubleVar(value=1.0)
         self.generate_seed_var = tk.StringVar(value="")
+        self.generate_device_var = tk.StringVar(value="cpu")
         self.generate_stream_var = tk.BooleanVar(value=True)
 
     def _build_corpus_defaults(self) -> None:
@@ -159,6 +168,8 @@ class OneBitLLMGui:
         self._add_entry(model_frame, "Vocab Size", self.vocab_size_var)
         self._add_entry(model_frame, "Max Seq Len", self.max_seq_len_var)
         self._add_entry(model_frame, "Activation", self.activation_var)
+        self._add_entry(model_frame, "Weight Format", self.weight_format_var)
+        self._add_entry(model_frame, "Train Weight Format", self.training_weight_format_var)
 
         train_frame = ttk.LabelFrame(self.train_tab, text="Rust Train Command")
         train_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -176,6 +187,12 @@ class OneBitLLMGui:
         self._add_entry(train_frame, "Log Every", self.train_log_every_var)
         self._add_entry(train_frame, "Seed", self.train_seed_var)
         self._add_browse_entry(train_frame, "Resume Checkpoint", self.train_resume_var, browse_dir=False)
+        self._add_browse_entry(train_frame, "Teacher Model", self.train_teacher_model_var, browse_dir=False)
+        self._add_browse_entry(train_frame, "Eval Corpus", self.train_eval_data_var, browse_dir=False)
+        self._add_entry(train_frame, "Train Weights", self.train_weight_mode_var)
+        self._add_entry(train_frame, "Save Weights", self.train_save_weight_mode_var)
+        self._add_entry(train_frame, "Distill Alpha", self.train_distill_alpha_var)
+        self._add_entry(train_frame, "Distill Temp", self.train_distill_temperature_var)
 
         button_row = ttk.Frame(self.train_tab)
         button_row.pack(fill=tk.X, padx=10, pady=10)
@@ -196,6 +213,7 @@ class OneBitLLMGui:
         self._add_entry(frame, "Top-P", self.generate_top_p_var)
         self._add_entry(frame, "Repetition Penalty", self.generate_repetition_penalty_var)
         self._add_entry(frame, "Seed", self.generate_seed_var)
+        self._add_entry(frame, "Device", self.generate_device_var)
 
         stream_row = ttk.Frame(frame)
         stream_row.pack(fill=tk.X, padx=8, pady=4)
@@ -311,6 +329,8 @@ class OneBitLLMGui:
             vocab_size=self.vocab_size_var.get(),
             max_seq_len=self.max_seq_len_var.get(),
             activation=self.activation_var.get().strip(),
+            weight_format=self.weight_format_var.get().strip(),
+            training_weight_format=self.training_weight_format_var.get().strip(),
         )
 
     def _write_model_config(self) -> None:
@@ -374,6 +394,12 @@ class OneBitLLMGui:
                 log_every=self.train_log_every_var.get(),
                 seed=int(self.train_seed_var.get()) if self.train_seed_var.get().strip() else None,
                 resume=self.train_resume_var.get().strip() or None,
+                teacher_model=self.train_teacher_model_var.get().strip() or None,
+                eval_data=self.train_eval_data_var.get().strip() or None,
+                train_weight_format=self.train_weight_mode_var.get().strip(),
+                save_weight_format=self.train_save_weight_mode_var.get().strip(),
+                distill_alpha=self.train_distill_alpha_var.get(),
+                distill_temperature=self.train_distill_temperature_var.get(),
             )
             LOGGER.info("Starting train action for corpus %s", job.data)
         except Exception as exc:
@@ -422,6 +448,7 @@ class OneBitLLMGui:
                 top_p=self.generate_top_p_var.get(),
                 repetition_penalty=self.generate_repetition_penalty_var.get(),
                 seed=int(self.generate_seed_var.get()) if self.generate_seed_var.get().strip() else None,
+                device=self.generate_device_var.get().strip(),
                 stream=self.generate_stream_var.get(),
             )
             LOGGER.info("Starting generate action for model %s", job.model)

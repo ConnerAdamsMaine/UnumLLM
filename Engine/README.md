@@ -4,17 +4,22 @@ A Rust engine for 1-bit/ternary language-model components, packed tensor math, a
 
 ## Overview
 
-OneBitLLM currently provides the core pieces for a Rust-first runtime, but it is not yet a complete end-to-end trainer or accelerator backend. Today the engine provides:
+OneBitLLM currently provides the core pieces for a Rust-first runtime, but it is not yet a complete transformer-scale trainer or accelerator backend. Today the engine provides:
 
 - **Core Engine** (`onebitllm-core`): The computational backbone with quantization, neural networks, and inference
-- **CLI Tool** (`onebitllm-cli`): command surface that validates arguments and exposes current implementation status
+- **CLI Tool** (`onebitllm-cli`): runnable byte-level bigram adaptation/runtime path plus validation/fail-fast coverage for larger architectures
 - **Python Bindings** (`onebitllm-python`): configuration/model container bindings around the Rust engine
 
 ## Current Status
 
 - The only working backend in-tree today is CPU.
 - Packed ternary inference paths are implemented in the core tensor/linear layers.
-- CLI `train`, `quantize`, and `generate` commands validate inputs but still fail fast because full pipelines are not wired yet.
+- CLI `train`, `quantize`, and `generate` now have a real byte-level bigram execution path with explicit `fp32` and `ternary` weight modes.
+- Bigram training supports optional teacher distillation, deterministic seeded step ordering, and deployed-model eval reporting.
+- Bigram quantization stores real packed ternary tensors in `.obm` files and reports conversion drift.
+- CLI `benchmark` measures cold load, latency percentiles, and throughput on real prompts for bigram `.obm` models.
+- CLI runtime commands now accept `--device cpu|rocm`; `rocm` is feature-gated and currently fails explicitly until HIP kernels are implemented.
+- Larger architectures still validate inputs and fail fast because the full transformer-style pipelines are not wired yet.
 - No ROCm/HIP backend exists yet, so MI300X support still requires a real accelerator implementation.
 
 ## Project Structure
@@ -83,6 +88,34 @@ cargo run --bin onebitllm -- --help
 cargo run --bin onebitllm -- <COMMAND> --help
 ```
 
+Bigram smoke flow:
+
+```bash
+cargo run --bin onebitllm -- train \
+  --data ../corpora/tinyshakespeare.txt \
+  --config /tmp/bigram.json \
+  --output /tmp/bigram-out \
+  --max-steps 32 \
+  --train-weight-format ternary \
+  --save-weight-format ternary \
+  --eval-data ../corpora/tinyshakespeare.txt
+
+cargo run --bin onebitllm -- generate \
+  --model /tmp/bigram-out/model.obm \
+  --prompt "The future of 1-bit models is" \
+  --max-tokens 32 \
+  --stream false
+
+cargo run --bin onebitllm -- benchmark \
+  --model /tmp/bigram-out/model.obm \
+  --prompt "The future of 1-bit models is" \
+  --requests 8 \
+  --concurrency 2
+
+# ROCm-ready build surface (device plumbing only for now)
+cargo build -p onebitllm-cli --features rocm
+```
+
 ### Python Integration
 
 ```python
@@ -103,9 +136,9 @@ The core computational library containing:
 
 ### [onebitllm-cli](crates/onebitllm-cli/README.md)
 Command-line interface for:
-- Argument/config validation
+- Byte-level bigram training, quantization, generation, and benchmarking
+- Argument/config validation for larger architectures
 - Current Rust pipeline status reporting
-- Future model training, quantization, and inference entry points
 
 ### [onebitllm-python](crates/onebitllm-python/README.md)
 Python bindings providing:

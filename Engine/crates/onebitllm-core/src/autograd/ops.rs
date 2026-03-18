@@ -8,7 +8,7 @@ use ndarray::{Array, Axis, IxDyn, Ix2};
 use super::tape::Tape;
 use super::variable::Variable;
 use crate::quant::{QuantConfig, QuantParams};
-use crate::quant::ternary::TernaryWeight;
+use crate::quant::ternary::{TernaryWeight, unit_quantize};
 
 // ---------------------------------------------------------------------------
 // Helper: get tape from variable, or return detached result
@@ -284,6 +284,75 @@ pub fn cross_entropy_loss(logits: &Variable, targets: &Array<f32, IxDyn>) -> Var
     }
 }
 
+/// Cross-entropy loss between logits and soft target probabilities.
+///
+/// `logits` shape: (batch, num_classes)
+/// `target_probs` shape: (batch, num_classes)
+/// `temperature` rescales the student logits before softmax.
+pub fn soft_target_cross_entropy_loss(
+    logits: &Variable,
+    target_probs: &Array<f32, IxDyn>,
+    temperature: f32,
+) -> Variable {
+    let batch_size = logits.data.shape()[0];
+    let num_classes = logits.data.shape()[1];
+    let safe_temperature = temperature.max(1e-6);
+
+    assert_eq!(
+        target_probs.shape(),
+        logits.data.shape(),
+        "target_probs shape {:?} must match logits shape {:?}",
+        target_probs.shape(),
+        logits.data.shape()
+    );
+
+    let scaled_logits = logits.data.mapv(|value| value / safe_temperature);
+    let sm = softmax_forward(&scaled_logits, 1);
+
+    let mut loss_sum = 0.0f32;
+    for batch_idx in 0..batch_size {
+        for class_idx in 0..num_classes {
+            let p = target_probs[[batch_idx, class_idx].as_ref()];
+            if p > 0.0 {
+                let q = sm[[batch_idx, class_idx].as_ref()].max(1e-12);
+                loss_sum -= p * q.ln();
+            }
+        }
+    }
+    let loss = loss_sum / batch_size as f32;
+    let out = Array::from_elem(IxDyn(&[1]), loss);
+
+    if let Some(tape_ref) = &logits.tape {
+        let logits_id = logits.id;
+        let targets_owned = target_probs.clone();
+
+        let mut tape = tape_ref.lock().unwrap();
+        let out_id = tape.alloc_id();
+        tape.record(out_id, vec![logits_id], move |grad| {
+            let grad_scalar = grad.as_slice().unwrap()[0];
+            let mut grad_logits = sm.clone();
+            for batch_idx in 0..batch_size {
+                for class_idx in 0..num_classes {
+                    grad_logits[[batch_idx, class_idx].as_ref()] -=
+                        targets_owned[[batch_idx, class_idx].as_ref()];
+                }
+            }
+            let scale = grad_scalar / (batch_size as f32 * safe_temperature);
+            grad_logits.mapv_inplace(|value| value * scale);
+            vec![grad_logits]
+        });
+
+        Variable {
+            id: out_id,
+            data: out,
+            requires_grad: logits.requires_grad,
+            tape: Some(Arc::clone(tape_ref)),
+        }
+    } else {
+        Variable::detached(out)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Sum
 // ---------------------------------------------------------------------------
@@ -390,6 +459,40 @@ pub fn quantize_ste(w: &Variable, config: &QuantConfig) -> Variable {
         let out_id = tape.alloc_id();
         tape.record(out_id, vec![w_id], move |grad| {
             // STE: clipped identity gradient
+            vec![grad.mapv(|g| g.clamp(-1.0, 1.0))]
+        });
+
+        Variable {
+            id: out_id,
+            data: out,
+            requires_grad: w.requires_grad,
+            tape: Some(Arc::clone(tape_ref)),
+        }
+    } else {
+        Variable::detached(out)
+    }
+}
+
+/// Straight-Through Estimator quantization to unit ternary {-1, 0, +1}.
+///
+/// Forward: quantize weights to exact unit ternary values using a fixed
+/// threshold. Backward: clipped identity gradient.
+pub fn quantize_unit_ste(w: &Variable, threshold: f32) -> Variable {
+    let shape = w.data.shape().to_vec();
+    let flat: Vec<f32> = w.data.iter().copied().collect();
+    let ternary = unit_quantize(&flat, threshold);
+    let out = Array::from_shape_vec(
+        IxDyn(&shape),
+        ternary.into_iter().map(TernaryWeight::to_f32).collect(),
+    )
+    .expect("quantize_unit_ste: shape mismatch in output");
+
+    if let Some(tape_ref) = &w.tape {
+        let w_id = w.id;
+
+        let mut tape = tape_ref.lock().unwrap();
+        let out_id = tape.alloc_id();
+        tape.record(out_id, vec![w_id], move |grad| {
             vec![grad.mapv(|g| g.clamp(-1.0, 1.0))]
         });
 
@@ -759,6 +862,26 @@ mod tests {
         assert!(row1_sum.abs() < 1e-5);
     }
 
+    #[test]
+    fn test_soft_target_cross_entropy_gradient() {
+        let tape = Tape::new();
+        let logits = Variable::new(
+            Array::from_shape_vec(IxDyn(&[1, 3]), vec![3.0, 1.0, -1.0]).unwrap(),
+            true,
+            &tape,
+        );
+        let targets =
+            Array::from_shape_vec(IxDyn(&[1, 3]), vec![0.9, 0.1, 0.0]).unwrap();
+
+        let loss = soft_target_cross_entropy_loss(&logits, &targets, 1.0);
+        let grads = loss.backward().unwrap();
+        let grad_logits = grads.get(&logits.id).unwrap();
+
+        assert!(loss.data[[0]] > 0.0);
+        assert!(grad_logits[[0, 0]] < 0.0);
+        assert!(grad_logits[[0, 2]] > 0.0);
+    }
+
     // --- sum test ---
 
     #[test]
@@ -844,6 +967,14 @@ mod tests {
             assert!((g - 1.0).abs() < 1e-6,
                 "Expected clipped grad 1.0, got {g}");
         }
+    }
+
+    #[test]
+    fn test_quantize_unit_ste_forward_outputs_exact_ternary() {
+        let tape = Tape::new();
+        let w = var1d(&tape, &[0.8, -0.8, 0.2, -0.2]);
+        let q = quantize_unit_ste(&w, 0.5);
+        assert_eq!(q.data.as_slice().unwrap(), &[1.0, -1.0, 0.0, 0.0]);
     }
 
     // --- rms_norm test ---

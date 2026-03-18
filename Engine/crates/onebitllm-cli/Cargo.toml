@@ -16,3 +16,9 @@ anyhow = { workspace = true }
 env_logger = { workspace = true }
 indicatif = { workspace = true }
 log = { workspace = true }
+ndarray = { workspace = true }
+rand = { workspace = true }
+
+[features]
+default = []
+rocm = ["onebitllm-core/rocm"]
