@@ -35,6 +35,12 @@ MODEL_CONFIG_FLAGS = (
     "--training-weight-format",
 )
 
+REDPAJAMA_SENTINEL = "redpajama"
+REDPAJAMA_PARTITION = "head_middle"
+REDPAJAMA_SNAPSHOTS = ("2023-06", "2022-49")
+REDPAJAMA_LANGUAGES = ("en", "de")
+REDPAJAMA_TEXT_FIELDS = ("raw_content", "text", "content")
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Rust training through the Python frontend")
@@ -112,6 +118,86 @@ def validate_train_inputs(job: TrainCommandConfig, config_path: str | Path) -> P
     return config_file
 
 
+def _is_redpajama_sentinel(value: str | None) -> bool:
+    return bool(value) and value.strip().lower() == REDPAJAMA_SENTINEL
+
+
+def _extract_redpajama_text(record: object) -> str | None:
+    if not isinstance(record, dict):
+        return None
+    for field in REDPAJAMA_TEXT_FIELDS:
+        value = record.get(field)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _materialize_redpajama_corpus(output_dir: str | Path, split_name: str) -> Path:
+    try:
+        from datasets import load_dataset
+    except ImportError as exc:
+        raise SystemExit(
+            "The HuggingFace `datasets` package is required for `--data RedPajama`. "
+            "Install it with `python3 -m pip install datasets`."
+        ) from exc
+
+    output_root = Path(output_dir).expanduser()
+    output_root.mkdir(parents=True, exist_ok=True)
+    corpus_path = output_root / f"redpajama_{split_name}.txt"
+    if corpus_path.is_file() and corpus_path.stat().st_size > 0:
+        print(f"Reusing materialized RedPajama corpus at {corpus_path}")
+        return corpus_path
+
+    print(
+        "Loading RedPajama dataset via HuggingFace with "
+        f"partition={REDPAJAMA_PARTITION}, "
+        f"snapshots={list(REDPAJAMA_SNAPSHOTS)}, "
+        f"languages={list(REDPAJAMA_LANGUAGES)}"
+    )
+    dataset = load_dataset(
+        "togethercomputer/RedPajama-Data-V2",
+        name="default",
+        partition=REDPAJAMA_PARTITION,
+        snapshots=list(REDPAJAMA_SNAPSHOTS),
+        languages=list(REDPAJAMA_LANGUAGES),
+    )
+
+    if isinstance(dataset, dict):
+        records = dataset.get("train")
+    else:
+        records = dataset
+
+    if records is None:
+        raise SystemExit("RedPajama loader did not return a usable dataset split.")
+
+    written = 0
+    with corpus_path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            text = _extract_redpajama_text(record)
+            if not text:
+                continue
+            handle.write(text)
+            handle.write("\n")
+            written += 1
+
+    if written == 0:
+        raise SystemExit(
+            "RedPajama dataset loaded, but no text records were found in fields "
+            f"{', '.join(REDPAJAMA_TEXT_FIELDS)}."
+        )
+
+    print(f"Materialized {written} RedPajama documents to {corpus_path}")
+    return corpus_path
+
+
+def resolve_special_dataset_inputs(job: TrainCommandConfig) -> TrainCommandConfig:
+    if _is_redpajama_sentinel(job.data):
+        job.data = str(_materialize_redpajama_corpus(job.output, "train"))
+    if _is_redpajama_sentinel(job.eval_data):
+        job.eval_data = str(_materialize_redpajama_corpus(job.output, "eval"))
+    return job
+
+
 def resolve_model_config_path(args: argparse.Namespace) -> Path:
     """Resolve an existing config path or write one from CLI flags."""
 
@@ -164,6 +250,7 @@ def run_train_command(
 ) -> int:
     """Run a Rust training job from Python."""
 
+    job = resolve_special_dataset_inputs(job)
     config_path = validate_train_inputs(job, config_path)
     return stream_engine_command(
         job.build_args(config_path),
