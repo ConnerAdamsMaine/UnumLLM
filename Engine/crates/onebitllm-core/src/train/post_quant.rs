@@ -4,10 +4,10 @@
 //! training is complete. This is an alternative to QAT for simpler
 //! quantization workflows.
 
-use ndarray::{Array, IxDyn};
 use crate::nn::Parameter;
-use crate::quant::{QuantConfig, QuantParams};
 use crate::quant::ternary::TernaryWeight;
+use crate::quant::{QuantConfig, QuantParams};
+use ndarray::{Array, IxDyn};
 
 /// Result of post-training quantization for a single parameter.
 #[derive(Debug, Clone)]
@@ -41,8 +41,8 @@ pub fn quantize_parameter(param: &Parameter, config: &QuantConfig) -> QuantizedP
         })
         .collect();
 
-    let quantized_data = Array::from_shape_vec(IxDyn(&shape), quantized)
-        .expect("post-quantization: shape mismatch");
+    let quantized_data =
+        Array::from_shape_vec(IxDyn(&shape), quantized).expect("post-quantization: shape mismatch");
 
     QuantizedParam {
         name: param.name.clone(),
@@ -53,10 +53,7 @@ pub fn quantize_parameter(param: &Parameter, config: &QuantConfig) -> QuantizedP
 }
 
 /// Quantize all trainable parameters in a list.
-pub fn quantize_all_parameters(
-    params: &[&Parameter],
-    config: &QuantConfig,
-) -> Vec<QuantizedParam> {
+pub fn quantize_all_parameters(params: &[&Parameter], config: &QuantConfig) -> Vec<QuantizedParam> {
     params
         .iter()
         .map(|p| quantize_parameter(p, config))
@@ -131,10 +128,7 @@ mod tests {
 
     #[test]
     fn test_quantize_zeros() {
-        let param = Parameter::new(
-            "zeros",
-            Array::from_elem(IxDyn(&[4]), 0.0f32),
-        );
+        let param = Parameter::new("zeros", Array::from_elem(IxDyn(&[4]), 0.0f32));
         let config = QuantConfig::per_tensor();
         let qp = quantize_parameter(&param, &config);
 

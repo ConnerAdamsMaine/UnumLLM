@@ -6,10 +6,10 @@ Command-line interface for the Rust OneBitLLM engine.
 
 `onebitllm-cli` is no longer just a validator surface. The current real execution path is the byte-level `bigram` architecture:
 
-- `train`: end-to-end bigram training with `fp32` or `ternary` train/save modes
+- `train`: end-to-end bigram training with `fp32`, strict `binary`, or `ternary` train/save modes
 - `train`: optional teacher-model distillation plus deployed-model eval reporting
-- `quantize`: bigram `.obm` conversion with packed ternary export and drift metrics
-- `generate`: runnable bigram inference on packed ternary or fp32 `.obm` models
+- `quantize`: bigram `.obm` conversion with packed binary/ternary export and drift metrics
+- `generate`: runnable bigram inference on packed binary, packed ternary, or fp32 `.obm` models
 - `benchmark`: real-prompt latency and throughput measurement
 - `generate` / `benchmark`: explicit `--device cpu|rocm` selection
 
@@ -40,7 +40,8 @@ cargo run --release --bin onebitllm -- --help
 
 - CPU is the only working backend in-tree today
 - ROCm build plumbing exists behind `--features rocm`, but HIP kernels are still stubbed and fail explicitly
-- Bigram `.obm` runtime supports `fp32` and packed `ternary` weights
+- Bigram `.obm` runtime supports `fp32`, packed `binary`, and packed `ternary` weights
+- Binary export writes raw 1-bit toggle streams plus serialized equalizer-seed/scale metadata
 - Ternary export writes real packed tensors plus serialized scale metadata
 - Distillation/eval/benchmark surfaces are currently bigram-only
 - Transformer-style architectures still stop after validation
@@ -55,26 +56,27 @@ onebitllm train \
   --data dataset/train.txt \
   --output output-dir \
   --max-steps 256 \
-  --train-weight-format ternary \
-  --save-weight-format ternary
+  --train-weight-format binary \
+  --save-weight-format binary
 ```
 
 Key options:
 
 - `--config <FILE>`: JSON model configuration
-- `--data <PATH>`: training corpus file or directory
+- `--data <PATH>`: training corpus file or directory (`.txt`, `.csv`, `.json`, `.jsonl`, `.ndjson`)
 - `--output <DIR>`: output directory for checkpoints and final `model.obm`
-- `--train-weight-format <MODE>`: `same-as-config`, `fp32`, or `ternary`
-- `--save-weight-format <MODE>`: `same-as-train`, `fp32`, or `ternary`
+- `--train-weight-format <MODE>`: `same-as-config`, `fp32`, `binary`, or `ternary`
+- `--save-weight-format <MODE>`: `same-as-train`, `fp32`, `binary`, or `ternary`
 - `--teacher-model <FILE>`: optional teacher bigram `.obm`
 - `--distill-alpha <FLOAT>`: blend factor from `0.0` to `1.0`
 - `--distill-temperature <FLOAT>`: temperature for teacher matching
-- `--eval-data <PATH>`: optional held-out corpus for deployed-model metrics
+- `--eval-data <PATH>`: optional held-out corpus (`.txt`, `.csv`, `.json`, `.jsonl`, `.ndjson`)
 - `--seed <SEED>`: deterministic batch-order seed
 
 Notes:
 
 - Real execution exists today only for `architecture = "bigram"` with `vocab_size = 256`
+- JSON and JSONL corpora are flattened by extracting textual/scalar values; CSV corpora are flattened row-by-row before byte-level bigram training
 - Final logs include deployed loss, perplexity, accuracy, and teacher-retention metrics when a teacher is provided
 
 ### Quantize
@@ -82,8 +84,8 @@ Notes:
 ```bash
 onebitllm quantize \
   --input teacher/model.obm \
-  --output teacher-ternary.obm \
-  --target-weight-format ternary \
+  --output teacher-binary.obm \
+  --target-weight-format binary \
   --granularity per-group:128 \
   --eval-data dataset/eval.txt
 ```
@@ -92,13 +94,14 @@ Key options:
 
 - `--input <FILE>`: input bigram `.obm`
 - `--output <FILE>`: output `.obm`
-- `--target-weight-format <MODE>`: `fp32` or `ternary`
+- `--target-weight-format <MODE>`: `fp32`, `binary`, or `ternary`
 - `--granularity <GRAN>`: `per-tensor`, `per-channel`, `per-group`, or `per-group:N`
 - `--group-size <N>`: default group size for `per-group`
 - `--eval-data <PATH>`: optional corpus for before/after eval
 
 Notes:
 
+- Binary export writes packed 1-bit toggle weights plus equalizer metadata, not dense fake `f32`
 - Ternary export writes packed 2-bit weights, not dense fake ternary `f32`
 - Conversion logs include MSE, mean absolute error, max absolute error, exact-match fraction, and optional eval/retention metrics
 
@@ -154,14 +157,22 @@ The current tree now has:
 
 - a `rocm` Cargo feature in `onebitllm-core` and `onebitllm-cli`
 - backend/device selection plumbing for runtime commands
+- 2D packed-weight kernel layout export for binary/ternary tensors, including scale layout and binary equalizer metadata
+- a HIP entrypoint for dense-left packed matmul (`packed_matmul_dense_left_transposed`) that is built when `hipcc` is available
 - explicit failure when `--device rocm` is chosen without a ROCm-enabled build
 
 What it still does not have:
 
-- HIP kernels
+- HIP coverage for packed matmul, packed matvec, and dense matmul beyond the first dense-left packed path
 - ROCm tensor backend implementations
 - ROCm training support
 - MI300-class runtime validation
+
+Build/runtime knobs for the first HIP path:
+
+- `ONEBITLLM_HIPCC=/abs/path/to/hipcc`: override the compiler used by `build.rs`
+- `ONEBITLLM_HIP_ARCH=gfx942`: optionally pin the offload arch during HIP kernel build
+- `ONEBITLLM_HIP_KERNEL_LIB=/abs/path/to/libonebitllm_hip_kernels.so`: override the runtime-loaded kernel library
 
 ## Model Configuration
 

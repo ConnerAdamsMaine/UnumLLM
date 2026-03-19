@@ -1,7 +1,7 @@
 use ndarray::{Array, IxDyn};
 
-use crate::Result;
 use crate::error::OneBitError;
+use crate::Result;
 
 /// Broadcast a dense f32 array to a target shape.
 ///

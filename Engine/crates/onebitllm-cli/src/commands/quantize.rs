@@ -26,8 +26,8 @@ pub struct QuantizeArgs {
     #[arg(long, default_value_t = false)]
     pub use_zero_point: bool,
 
-    /// Output weight format (`fp32` or `ternary`).
-    #[arg(long, default_value = "ternary")]
+    /// Output weight format (`fp32`, `binary`, or `ternary`).
+    #[arg(long, default_value = "binary")]
     pub target_weight_format: String,
 
     /// Optional evaluation corpus for before/after quality checks.
@@ -46,7 +46,9 @@ fn parse_granularity(
             if group_size == 0 {
                 bail!("--group-size must be greater than 0 when using per-group quantization");
             }
-            Ok(onebitllm_core::quant::QuantGranularity::PerGroup(group_size))
+            Ok(onebitllm_core::quant::QuantGranularity::PerGroup(
+                group_size,
+            ))
         }
         other => {
             if let Some(raw_size) = other.strip_prefix("per-group:") {
@@ -58,7 +60,9 @@ fn parse_granularity(
                 if parsed_size == 0 {
                     bail!("per-group granularity must use a group size greater than 0");
                 }
-                Ok(onebitllm_core::quant::QuantGranularity::PerGroup(parsed_size))
+                Ok(onebitllm_core::quant::QuantGranularity::PerGroup(
+                    parsed_size,
+                ))
             } else {
                 bail!(
                     "Unknown granularity: {other}. Use per-tensor, per-channel, per-group, or per-group:N"
@@ -97,7 +101,7 @@ pub fn run(args: QuantizeArgs) -> anyhow::Result<()> {
     let output_path = std::path::Path::new(&args.output);
     if args.use_zero_point {
         bail!(
-            "bigram quantization does not support --use-zero-point; ternary runtime export is symmetric only"
+            "bigram quantization does not support --use-zero-point; packed runtime export is symmetric only"
         );
     }
     if let Some(eval_data) = &args.eval_data {
@@ -130,8 +134,10 @@ pub fn run(args: QuantizeArgs) -> anyhow::Result<()> {
         }
         if let Some(eval_data) = &args.eval_data {
             let eval_tokens = bigram::collect_corpus_bytes(std::path::Path::new(eval_data))?;
-            let source_eval = bigram::evaluate_bigram_weight(&source_model.dense_weight, &eval_tokens)?;
-            let deployed_eval = bigram::evaluate_bigram_weight(&deployed_model.dense_weight, &eval_tokens)?;
+            let source_eval =
+                bigram::evaluate_bigram_weight(&source_model.dense_weight, &eval_tokens)?;
+            let deployed_eval =
+                bigram::evaluate_bigram_weight(&deployed_model.dense_weight, &eval_tokens)?;
             log::info!(
                 "source eval pairs={} loss={:.4} ppl={:.4} accuracy={:.4}",
                 source_eval.pair_count,

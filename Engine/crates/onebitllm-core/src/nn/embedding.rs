@@ -1,9 +1,9 @@
 use ndarray::{Array, IxDyn};
 use rand::Rng;
 
-use crate::Result;
-use crate::error::OneBitError;
 use super::module::{Module, Parameter};
+use crate::error::OneBitError;
+use crate::Result;
 
 /// Token embedding layer.
 ///
@@ -72,11 +72,7 @@ impl Embedding {
             output.extend_from_slice(&weight_slice[row_start..row_start + self.embed_dim]);
         }
 
-        Ok(Array::from_shape_vec(
-            IxDyn(&[ids.len(), self.embed_dim]),
-            output,
-        )
-        .unwrap())
+        Ok(Array::from_shape_vec(IxDyn(&[ids.len(), self.embed_dim]), output).unwrap())
     }
 
     pub fn vocab_size(&self) -> usize {
@@ -148,8 +144,8 @@ mod tests {
     #[test]
     fn test_embedding_2d_input() {
         let emb = Embedding::new(10, 4);
-        let input = Array::from_shape_vec(IxDyn(&[2, 3]), vec![0.0f32, 1.0, 2.0, 3.0, 4.0, 5.0])
-            .unwrap();
+        let input =
+            Array::from_shape_vec(IxDyn(&[2, 3]), vec![0.0f32, 1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
         let result = emb.forward_inference(&input).unwrap();
         assert_eq!(result.shape(), &[2, 3, 4]);
     }

@@ -1,8 +1,8 @@
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
-use ndarray::{Array, IxDyn};
-use super::tape::Tape;
 use super::backward::run_backward;
+use super::tape::Tape;
+use ndarray::{Array, IxDyn};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// A unique identifier for a variable on the computation tape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

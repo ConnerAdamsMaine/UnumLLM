@@ -1,11 +1,14 @@
-pub mod traits;
 pub mod cpu;
+pub mod traits;
+
+#[cfg(feature = "rocm")]
+mod hip_runtime;
 
 #[cfg(feature = "rocm")]
 pub mod rocm;
 
-use crate::Result;
 use crate::error::OneBitError;
+use crate::Result;
 
 pub use cpu::CpuBackend;
 pub use traits::ComputeBackend;

@@ -27,8 +27,8 @@ impl PyModel {
         // Rough estimate: embedding + per-layer (attn + ffn + norms)
         let embedding_params = v * h;
         let attn_params = 4 * h * h; // Q, K, V, O projections
-        let ffn_params = 3 * h * ff;  // up, gate, down
-        let norm_params = 2 * h;      // 2 norms per layer
+        let ffn_params = 3 * h * ff; // up, gate, down
+        let norm_params = 2 * h; // 2 norms per layer
         let per_layer = attn_params + ffn_params + norm_params;
         let total = embedding_params + l * per_layer + h; // +final norm
 
@@ -46,9 +46,11 @@ impl PyModel {
         let obm = onebitllm_core::io::ObmFile::load(file)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let config = PyModelConfig::from_core(&obm.header.config);
-        let num_params: usize = obm.tensors.iter().map(|t| {
-            t.shape.iter().product::<usize>()
-        }).sum();
+        let num_params: usize = obm
+            .tensors
+            .iter()
+            .map(|t| t.shape.iter().product::<usize>())
+            .sum();
 
         Ok(Self {
             config,

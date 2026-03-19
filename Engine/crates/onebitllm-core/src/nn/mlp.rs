@@ -1,10 +1,10 @@
 use ndarray::{Array, IxDyn};
 
-use crate::Result;
-use crate::quant::QuantConfig;
 use super::activation::ActivationFn;
 use super::linear::QuantizedLinear;
 use super::module::{Module, Parameter};
+use crate::quant::QuantConfig;
+use crate::Result;
 
 /// MLP block with quantized linear layers.
 ///
@@ -42,18 +42,9 @@ impl MlpBlock {
             None
         };
 
-        let up_proj = QuantizedLinear::new(
-            hidden_dim,
-            intermediate_dim,
-            false,
-            quant_config.clone(),
-        );
-        let down_proj = QuantizedLinear::new(
-            intermediate_dim,
-            hidden_dim,
-            false,
-            quant_config,
-        );
+        let up_proj =
+            QuantizedLinear::new(hidden_dim, intermediate_dim, false, quant_config.clone());
+        let down_proj = QuantizedLinear::new(intermediate_dim, hidden_dim, false, quant_config);
 
         Self {
             gate_proj,

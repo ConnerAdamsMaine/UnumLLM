@@ -1,13 +1,11 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use ndarray::{Array, IxDyn};
 
 fn bench_softmax(c: &mut Criterion) {
     let mut group = c.benchmark_group("softmax");
 
     for &vocab_size in &[1000, 10000, 32000] {
-        let logits: Vec<f32> = (0..vocab_size)
-            .map(|i| ((i as f32) * 0.01).sin())
-            .collect();
+        let logits: Vec<f32> = (0..vocab_size).map(|i| ((i as f32) * 0.01).sin()).collect();
 
         group.bench_with_input(
             BenchmarkId::new("softmax_1d", vocab_size),
@@ -63,9 +61,7 @@ fn bench_sampler(c: &mut Criterion) {
     let mut group = c.benchmark_group("sampler");
 
     for &vocab_size in &[1000, 32000] {
-        let logits: Vec<f32> = (0..vocab_size)
-            .map(|i| ((i as f32) * 0.01).sin())
-            .collect();
+        let logits: Vec<f32> = (0..vocab_size).map(|i| ((i as f32) * 0.01).sin()).collect();
         let logits_arr = Array::from_shape_vec(IxDyn(&[vocab_size]), logits).unwrap();
 
         group.bench_with_input(

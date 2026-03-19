@@ -4,11 +4,11 @@
 //! Straight-Through Estimator for gradient flow. These functions
 //! manage enabling and freezing QAT mode on model parameters.
 
-use ndarray::{Array, IxDyn};
+use crate::autograd::ops;
+use crate::autograd::Variable;
 use crate::nn::Parameter;
 use crate::quant::QuantConfig;
-use crate::autograd::Variable;
-use crate::autograd::ops;
+use ndarray::{Array, IxDyn};
 
 /// Apply QAT quantization to a weight variable.
 ///
@@ -100,7 +100,8 @@ mod tests {
     #[test]
     fn test_is_approximately_ternary() {
         // Perfectly ternary (with scale 0.5)
-        let data = Array::from_shape_vec(IxDyn(&[6]), vec![0.5, -0.5, 0.0, 0.5, 0.0, -0.5]).unwrap();
+        let data =
+            Array::from_shape_vec(IxDyn(&[6]), vec![0.5, -0.5, 0.0, 0.5, 0.0, -0.5]).unwrap();
         assert!(is_approximately_ternary(&data, 0.01));
 
         // Not ternary

@@ -1,10 +1,10 @@
-use ndarray::{Array, Ix2, IxDyn, s};
+use ndarray::{s, Array, Ix2, IxDyn};
 
-use crate::Result;
-use crate::error::OneBitError;
-use crate::quant::QuantConfig;
 use super::linear::QuantizedLinear;
 use super::module::{Module, Parameter};
+use crate::error::OneBitError;
+use crate::quant::QuantConfig;
+use crate::Result;
 
 /// Configuration for attention layers.
 #[derive(Debug, Clone)]
@@ -41,10 +41,30 @@ impl Attention {
         let kv_dim = kv_heads * config.head_dim;
 
         Self {
-            q_proj: QuantizedLinear::new(config.embed_dim, q_dim, config.use_bias, config.quant_config.clone()),
-            k_proj: QuantizedLinear::new(config.embed_dim, kv_dim, config.use_bias, config.quant_config.clone()),
-            v_proj: QuantizedLinear::new(config.embed_dim, kv_dim, config.use_bias, config.quant_config.clone()),
-            o_proj: QuantizedLinear::new(q_dim, config.embed_dim, config.use_bias, config.quant_config.clone()),
+            q_proj: QuantizedLinear::new(
+                config.embed_dim,
+                q_dim,
+                config.use_bias,
+                config.quant_config.clone(),
+            ),
+            k_proj: QuantizedLinear::new(
+                config.embed_dim,
+                kv_dim,
+                config.use_bias,
+                config.quant_config.clone(),
+            ),
+            v_proj: QuantizedLinear::new(
+                config.embed_dim,
+                kv_dim,
+                config.use_bias,
+                config.quant_config.clone(),
+            ),
+            o_proj: QuantizedLinear::new(
+                q_dim,
+                config.embed_dim,
+                config.use_bias,
+                config.quant_config.clone(),
+            ),
             config,
         }
     }

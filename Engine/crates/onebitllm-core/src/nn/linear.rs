@@ -1,11 +1,11 @@
-use ndarray::{Array, IxDyn, Ix2};
+use ndarray::{Array, Ix2, IxDyn};
 use rand::Rng;
 
-use crate::Result;
+use super::module::{Module, Parameter};
 use crate::error::OneBitError;
 use crate::quant::QuantConfig;
 use crate::tensor::PackedTensor;
-use super::module::{Module, Parameter};
+use crate::Result;
 
 /// A quantized linear layer (BitLinear).
 ///
@@ -142,11 +142,10 @@ impl Module for QuantizedLinear {
         let input_2d_concrete = input_2d
             .into_dimensionality::<Ix2>()
             .map_err(|e| OneBitError::TensorOp(e.to_string()))?;
-        let mut output = packed.matmul_dense_left_transposed(
-            &input_2d_concrete.into_dyn(),
-        )?
-        .into_dimensionality::<Ix2>()
-        .map_err(|e| OneBitError::TensorOp(e.to_string()))?;
+        let mut output = packed
+            .matmul_dense_left_transposed(&input_2d_concrete.into_dyn())?
+            .into_dimensionality::<Ix2>()
+            .map_err(|e| OneBitError::TensorOp(e.to_string()))?;
 
         // Add bias
         if let Some(bias) = &self.bias {

@@ -1,7 +1,7 @@
 use ndarray::{Array, IxDyn};
 
-use crate::Result;
 use crate::tensor::PackedTensor;
+use crate::Result;
 
 /// Backend trait for compute operations.
 ///

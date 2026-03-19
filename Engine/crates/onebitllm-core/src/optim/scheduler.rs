@@ -144,7 +144,10 @@ mod tests {
         // Cosine should be monotonically decreasing
         for step in 1..=1000 {
             let lr = sched.get_lr(step);
-            assert!(lr <= prev + 1e-6, "Cosine should decrease: step={step}, lr={lr}, prev={prev}");
+            assert!(
+                lr <= prev + 1e-6,
+                "Cosine should decrease: step={step}, lr={lr}, prev={prev}"
+            );
             prev = lr;
         }
     }
@@ -157,8 +160,10 @@ mod tests {
         // All values should be in [0.1, 1.0]
         for step in 0..=100 {
             let lr = sched.get_lr(step);
-            assert!(lr >= 0.1 - 1e-6 && lr <= 1.0 + 1e-6,
-                "LR out of range at step {step}: {lr}");
+            assert!(
+                lr >= 0.1 - 1e-6 && lr <= 1.0 + 1e-6,
+                "LR out of range at step {step}: {lr}"
+            );
         }
     }
 
@@ -193,7 +198,10 @@ mod tests {
 
         // After warmup: delegates to cosine starting from step 0
         let lr_10 = sched.get_lr(10);
-        assert!((lr_10 - 1.0).abs() < 1e-5, "After warmup should start at cosine(0), got {lr_10}");
+        assert!(
+            (lr_10 - 1.0).abs() < 1e-5,
+            "After warmup should start at cosine(0), got {lr_10}"
+        );
 
         // Total steps
         assert_eq!(sched.total_steps(), 110);

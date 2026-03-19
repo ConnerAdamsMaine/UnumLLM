@@ -1,7 +1,8 @@
 //! Custom `.obm` (OneBit Model) binary format.
 //!
 //! A compact binary format designed for 1-bit quantized models. Stores both
-//! model configuration and weight tensors (f32 or bitpacked ternary) in a
+//! model configuration and weight tensors (f32, bitpacked ternary, or packed
+//! binary toggle weights) in a
 //! single file with a clear header for fast loading.
 //!
 //! ## Format Layout
@@ -15,7 +16,7 @@
 //! For each tensor:
 //!   [Name length: u32 LE]
 //!   [Name: N bytes UTF-8]
-//!   [Format: u8] (0=f32, 1=bitpacked_ternary)
+//!   [Format: u8] (0=f32, 1=bitpacked_ternary, 2=bitpacked_binary)
 //!   [Ndim: u32 LE]
 //!   [Shape: ndim × u64 LE]
 //!   [Data length: u64 LE]  (in bytes)
@@ -24,9 +25,9 @@
 
 use std::io::{Read, Write};
 
-use crate::Result;
-use crate::error::OneBitError;
 use super::config::ModelConfig;
+use crate::error::OneBitError;
+use crate::Result;
 
 const OBM_MAGIC: &[u8; 4] = b"OBM1";
 const OBM_VERSION: u32 = 1;
@@ -39,6 +40,8 @@ pub enum TensorFormat {
     Float32 = 0,
     /// Bitpacked ternary (2 bits per weight, packed into u64s).
     BitpackedTernary = 1,
+    /// Bitpacked binary toggle weights (1 bit per weight, packed into u64s).
+    BitpackedBinary = 2,
 }
 
 impl TensorFormat {
@@ -46,6 +49,7 @@ impl TensorFormat {
         match v {
             0 => Ok(TensorFormat::Float32),
             1 => Ok(TensorFormat::BitpackedTernary),
+            2 => Ok(TensorFormat::BitpackedBinary),
             _ => Err(OneBitError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Unknown tensor format: {v}"),
@@ -101,27 +105,40 @@ impl ObmTensor {
         }
     }
 
+    /// Create a packed binary tensor entry from name, shape, and packed u64 data.
+    pub fn from_binary(name: impl Into<String>, shape: Vec<usize>, packed: &[u64]) -> Self {
+        let bytes: Vec<u8> = packed.iter().flat_map(|v| v.to_le_bytes()).collect();
+        Self {
+            name: name.into(),
+            format: TensorFormat::BitpackedBinary,
+            shape,
+            data: bytes,
+        }
+    }
+
     /// Interpret data as f32 slice (only valid if format is Float32).
     pub fn as_f32(&self) -> Result<Vec<f32>> {
         if self.format != TensorFormat::Float32 {
-            return Err(OneBitError::Config(
-                "Tensor is not in f32 format".into(),
-            ));
+            return Err(OneBitError::Config("Tensor is not in f32 format".into()));
         }
         if self.data.len() % 4 != 0 {
             return Err(OneBitError::Config(
                 "f32 tensor data length not a multiple of 4".into(),
             ));
         }
-        Ok(self.data
+        Ok(self
+            .data
             .chunks_exact(4)
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect())
     }
 
-    /// Interpret data as u64 slice (only valid if format is BitpackedTernary).
+    /// Interpret data as u64 slice (only valid for packed ternary/binary tensors).
     pub fn as_packed_u64(&self) -> Result<Vec<u64>> {
-        if self.format != TensorFormat::BitpackedTernary {
+        if !matches!(
+            self.format,
+            TensorFormat::BitpackedTernary | TensorFormat::BitpackedBinary
+        ) {
             return Err(OneBitError::Config(
                 "Tensor is not in bitpacked format".into(),
             ));
@@ -131,7 +148,8 @@ impl ObmTensor {
                 "Packed tensor data length not a multiple of 8".into(),
             ));
         }
-        Ok(self.data
+        Ok(self
+            .data
             .chunks_exact(8)
             .map(|c| u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
             .collect())
@@ -229,9 +247,8 @@ impl ObmFile {
         let config_len = u64::from_le_bytes(buf8) as usize;
         let mut config_buf = vec![0u8; config_len];
         r.read_exact(&mut config_buf)?;
-        let config_str = String::from_utf8(config_buf).map_err(|e| {
-            OneBitError::Config(format!("Invalid UTF-8 in OBM config: {e}"))
-        })?;
+        let config_str = String::from_utf8(config_buf)
+            .map_err(|e| OneBitError::Config(format!("Invalid UTF-8 in OBM config: {e}")))?;
         let config = ModelConfig::from_json_str(&config_str)?;
 
         // Num tensors
@@ -246,9 +263,8 @@ impl ObmFile {
             let name_len = u32::from_le_bytes(buf4) as usize;
             let mut name_buf = vec![0u8; name_len];
             r.read_exact(&mut name_buf)?;
-            let name = String::from_utf8(name_buf).map_err(|e| {
-                OneBitError::Config(format!("Invalid UTF-8 in tensor name: {e}"))
-            })?;
+            let name = String::from_utf8(name_buf)
+                .map_err(|e| OneBitError::Config(format!("Invalid UTF-8 in tensor name: {e}")))?;
 
             // Format
             let mut fmt_byte = [0u8; 1];
@@ -338,6 +354,22 @@ mod tests {
     }
 
     #[test]
+    fn test_obm_roundtrip_binary() {
+        let config = ModelConfig::default();
+        let packed = vec![0xA5A5_A5A5_A5A5_A5A5_u64];
+        let tensor = ObmTensor::from_binary("layer.binary_weight", vec![64], &packed);
+        let obm = ObmFile::new(config, vec![tensor]);
+
+        let mut buf = Vec::new();
+        obm.save(&mut buf).unwrap();
+
+        let loaded = ObmFile::load(Cursor::new(&buf)).unwrap();
+        let t = &loaded.tensors[0];
+        assert_eq!(t.format, TensorFormat::BitpackedBinary);
+        assert_eq!(t.as_packed_u64().unwrap(), packed);
+    }
+
+    #[test]
     fn test_obm_multiple_tensors() {
         let config = ModelConfig::default();
         let t1 = ObmTensor::from_f32("w1", vec![4], &[1.0, 2.0, 3.0, 4.0]);
@@ -352,7 +384,10 @@ mod tests {
         assert_eq!(loaded.tensors.len(), 3);
         assert_eq!(loaded.get_tensor("w1").unwrap().name, "w1");
         assert_eq!(loaded.get_tensor("w2").unwrap().shape, vec![2, 2]);
-        assert_eq!(loaded.get_tensor("w3").unwrap().format, TensorFormat::BitpackedTernary);
+        assert_eq!(
+            loaded.get_tensor("w3").unwrap().format,
+            TensorFormat::BitpackedTernary
+        );
         assert!(loaded.get_tensor("nonexistent").is_none());
     }
 
@@ -381,6 +416,10 @@ mod tests {
         assert!(t.as_packed_u64().is_err());
 
         let t = ObmTensor::from_packed("y", vec![32], &[0u64]);
+        assert!(t.as_packed_u64().is_ok());
+        assert!(t.as_f32().is_err());
+
+        let t = ObmTensor::from_binary("z", vec![64], &[0u64]);
         assert!(t.as_packed_u64().is_ok());
         assert!(t.as_f32().is_err());
     }

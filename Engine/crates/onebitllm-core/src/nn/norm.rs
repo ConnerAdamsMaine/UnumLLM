@@ -1,8 +1,8 @@
 use ndarray::{Array, IxDyn};
 
-use crate::Result;
-use crate::error::OneBitError;
 use super::module::{Module, Parameter};
+use crate::error::OneBitError;
+use crate::Result;
 
 /// RMSNorm (Root Mean Square Layer Normalization).
 ///
@@ -18,10 +18,7 @@ pub struct RmsNorm {
 
 impl RmsNorm {
     pub fn new(hidden_size: usize, eps: f32) -> Self {
-        let weight = Parameter::new(
-            "weight",
-            Array::from_elem(IxDyn(&[hidden_size]), 1.0f32),
-        );
+        let weight = Parameter::new("weight", Array::from_elem(IxDyn(&[hidden_size]), 1.0f32));
         Self {
             weight,
             eps,
@@ -93,14 +90,8 @@ pub struct LayerNorm {
 
 impl LayerNorm {
     pub fn new(hidden_size: usize, eps: f32) -> Self {
-        let weight = Parameter::new(
-            "weight",
-            Array::from_elem(IxDyn(&[hidden_size]), 1.0f32),
-        );
-        let bias = Parameter::new(
-            "bias",
-            Array::from_elem(IxDyn(&[hidden_size]), 0.0f32),
-        );
+        let weight = Parameter::new("weight", Array::from_elem(IxDyn(&[hidden_size]), 1.0f32));
+        let bias = Parameter::new("bias", Array::from_elem(IxDyn(&[hidden_size]), 0.0f32));
         Self {
             weight,
             bias,
@@ -134,8 +125,8 @@ impl Module for LayerNorm {
         let mut output = Array::zeros(flat.raw_dim());
         for (i, row) in flat.rows().into_iter().enumerate() {
             let mean: f32 = row.iter().sum::<f32>() / self.hidden_size as f32;
-            let var: f32 = row.iter().map(|&x| (x - mean) * (x - mean)).sum::<f32>()
-                / self.hidden_size as f32;
+            let var: f32 =
+                row.iter().map(|&x| (x - mean) * (x - mean)).sum::<f32>() / self.hidden_size as f32;
             let std = (var + self.eps).sqrt();
 
             for (j, &x) in row.iter().enumerate() {

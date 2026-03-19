@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::Result;
-use crate::error::OneBitError;
 use super::traits::{Encoding, Tokenizer};
+use crate::error::OneBitError;
+use crate::Result;
 
 /// A minimal BPE (Byte-Pair Encoding) tokenizer.
 ///
@@ -73,10 +73,7 @@ impl SimpleBpe {
     }
 
     /// Create from in-memory vocab and merges (for testing).
-    pub fn from_data(
-        vocab: HashMap<String, u32>,
-        merges: Vec<(String, String)>,
-    ) -> Self {
+    pub fn from_data(vocab: HashMap<String, u32>, merges: Vec<(String, String)>) -> Self {
         let reverse_vocab: HashMap<u32, String> =
             vocab.iter().map(|(k, v)| (*v, k.clone())).collect();
         Self {
@@ -188,10 +185,10 @@ mod tests {
         // merge ll+o -> ["he","llo"]
         // merge he+llo -> ["hello"]
         let merges = vec![
-            ("h".to_string(), "e".to_string()),      // h + e -> he
-            ("l".to_string(), "l".to_string()),      // l + l -> ll
-            ("ll".to_string(), "o".to_string()),     // ll + o -> llo
-            ("he".to_string(), "llo".to_string()),   // he + llo -> hello
+            ("h".to_string(), "e".to_string()),    // h + e -> he
+            ("l".to_string(), "l".to_string()),    // l + l -> ll
+            ("ll".to_string(), "o".to_string()),   // ll + o -> llo
+            ("he".to_string(), "llo".to_string()), // he + llo -> hello
         ];
 
         SimpleBpe::from_data(vocab, merges)

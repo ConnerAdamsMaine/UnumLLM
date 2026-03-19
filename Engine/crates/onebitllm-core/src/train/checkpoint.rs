@@ -3,9 +3,9 @@
 //! Provides basic serialization of model parameters for saving and
 //! restoring training state. Uses a simple binary format.
 
-use std::io::{Read, Write};
-use ndarray::{Array, IxDyn};
 use crate::nn::Parameter;
+use ndarray::{Array, IxDyn};
+use std::io::{Read, Write};
 
 /// A serializable checkpoint containing parameter names, shapes, and data.
 #[derive(Debug, Clone)]
@@ -58,8 +58,8 @@ impl Checkpoint {
                     ))
                 })?;
 
-            let data = Array::from_shape_vec(IxDyn(&entry.shape), entry.data.clone())
-                .map_err(|e| {
+            let data =
+                Array::from_shape_vec(IxDyn(&entry.shape), entry.data.clone()).map_err(|e| {
                     crate::error::OneBitError::Training(format!(
                         "Failed to restore parameter '{}': {e}",
                         entry.name
@@ -213,31 +213,19 @@ mod tests {
         let ckpt = Checkpoint::from_parameters(&[&p1], 10);
 
         // Create new parameter with different data
-        let mut p_new = Parameter::new(
-            "w",
-            Array::from_elem(IxDyn(&[3]), 0.0f32),
-        );
+        let mut p_new = Parameter::new("w", Array::from_elem(IxDyn(&[3]), 0.0f32));
 
         ckpt.restore_into(&mut [&mut p_new]).unwrap();
 
-        assert_eq!(
-            p_new.data.as_slice().unwrap(),
-            &[1.0, 2.0, 3.0]
-        );
+        assert_eq!(p_new.data.as_slice().unwrap(), &[1.0, 2.0, 3.0]);
     }
 
     #[test]
     fn test_checkpoint_restore_missing_param() {
-        let p1 = Parameter::new(
-            "nonexistent",
-            Array::from_elem(IxDyn(&[1]), 1.0f32),
-        );
+        let p1 = Parameter::new("nonexistent", Array::from_elem(IxDyn(&[1]), 1.0f32));
         let ckpt = Checkpoint::from_parameters(&[&p1], 0);
 
-        let mut p_new = Parameter::new(
-            "different_name",
-            Array::from_elem(IxDyn(&[1]), 0.0f32),
-        );
+        let mut p_new = Parameter::new("different_name", Array::from_elem(IxDyn(&[1]), 0.0f32));
 
         assert!(ckpt.restore_into(&mut [&mut p_new]).is_err());
     }

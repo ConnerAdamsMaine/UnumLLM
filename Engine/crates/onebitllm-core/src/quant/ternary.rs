@@ -1,5 +1,5 @@
-use crate::Result;
 use crate::error::OneBitError;
+use crate::Result;
 
 /// A single ternary weight value: {-1, 0, +1}.
 ///

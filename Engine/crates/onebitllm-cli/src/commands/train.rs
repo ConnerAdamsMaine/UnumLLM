@@ -6,7 +6,7 @@ use super::bigram;
 /// Arguments for the `train` subcommand.
 #[derive(Args)]
 pub struct TrainArgs {
-    /// Path to training data (directory or file).
+    /// Path to training data (TXT/CSV/JSON/JSONL file or directory).
     #[arg(short, long)]
     pub data: String,
 
@@ -66,15 +66,15 @@ pub struct TrainArgs {
     #[arg(long)]
     pub teacher_model: Option<String>,
 
-    /// Optional evaluation corpus for deployed-model metrics.
+    /// Optional evaluation corpus (TXT/CSV/JSON/JSONL file or directory).
     #[arg(long)]
     pub eval_data: Option<String>,
 
-    /// Training-time weight format (`fp32` or `ternary`).
+    /// Training-time weight format (`fp32`, `binary`, or `ternary`).
     #[arg(long, default_value = "same-as-config")]
     pub train_weight_format: String,
 
-    /// Output weight format (`same-as-train`, `fp32`, or `ternary`).
+    /// Output weight format (`same-as-train`, `fp32`, `binary`, or `ternary`).
     #[arg(long, default_value = "same-as-train")]
     pub save_weight_format: String,
 
@@ -147,7 +147,10 @@ pub fn run(args: TrainArgs) -> anyhow::Result<()> {
         bail!("--distill-temperature must be greater than 0");
     }
 
-    let train_weight_format = if args.train_weight_format.eq_ignore_ascii_case("same-as-config") {
+    let train_weight_format = if args
+        .train_weight_format
+        .eq_ignore_ascii_case("same-as-config")
+    {
         _model_config.training_weight_format.clone()
     } else {
         args.train_weight_format.clone()

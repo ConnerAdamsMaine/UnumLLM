@@ -42,9 +42,9 @@ pub struct ModelConfig {
     pub use_bias: bool,
     /// Quantization group size (0 for per-tensor).
     pub quant_group_size: usize,
-    /// Stored/runtime weight format ("fp32" or "ternary").
+    /// Stored/runtime weight format ("fp32", "ternary", or "binary").
     pub weight_format: String,
-    /// Preferred training-time weight format ("fp32" or "ternary").
+    /// Preferred training-time weight format ("fp32", "ternary", or "binary").
     pub training_weight_format: String,
     /// Additional arbitrary key-value metadata.
     pub metadata: HashMap<String, String>,
@@ -67,8 +67,8 @@ impl Default for ModelConfig {
             rope_theta: 10000.0,
             use_bias: false,
             quant_group_size: 0,
-            weight_format: "ternary".into(),
-            training_weight_format: "ternary".into(),
+            weight_format: "binary".into(),
+            training_weight_format: "binary".into(),
             metadata: HashMap::new(),
         }
     }
@@ -92,21 +92,42 @@ impl ModelConfig {
     /// Serialize to a JSON string (without serde_json dependency — manual).
     fn to_json_string(&self) -> Result<String> {
         let mut s = String::from("{\n");
-        s.push_str(&format!("  \"architecture\": {},\n", json_str(&self.architecture)));
+        s.push_str(&format!(
+            "  \"architecture\": {},\n",
+            json_str(&self.architecture)
+        ));
         s.push_str(&format!("  \"hidden_size\": {},\n", self.hidden_size));
         s.push_str(&format!("  \"num_layers\": {},\n", self.num_layers));
-        s.push_str(&format!("  \"num_attention_heads\": {},\n", self.num_attention_heads));
+        s.push_str(&format!(
+            "  \"num_attention_heads\": {},\n",
+            self.num_attention_heads
+        ));
         s.push_str(&format!("  \"num_kv_heads\": {},\n", self.num_kv_heads));
-        s.push_str(&format!("  \"intermediate_size\": {},\n", self.intermediate_size));
+        s.push_str(&format!(
+            "  \"intermediate_size\": {},\n",
+            self.intermediate_size
+        ));
         s.push_str(&format!("  \"vocab_size\": {},\n", self.vocab_size));
         s.push_str(&format!("  \"max_seq_len\": {},\n", self.max_seq_len));
         s.push_str(&format!("  \"rms_norm_eps\": {},\n", self.rms_norm_eps));
-        s.push_str(&format!("  \"activation\": {},\n", json_str(&self.activation)));
-        s.push_str(&format!("  \"positional_encoding\": {},\n", json_str(&self.positional_encoding)));
+        s.push_str(&format!(
+            "  \"activation\": {},\n",
+            json_str(&self.activation)
+        ));
+        s.push_str(&format!(
+            "  \"positional_encoding\": {},\n",
+            json_str(&self.positional_encoding)
+        ));
         s.push_str(&format!("  \"rope_theta\": {},\n", self.rope_theta));
         s.push_str(&format!("  \"use_bias\": {},\n", self.use_bias));
-        s.push_str(&format!("  \"quant_group_size\": {},\n", self.quant_group_size));
-        s.push_str(&format!("  \"weight_format\": {},\n", json_str(&self.weight_format)));
+        s.push_str(&format!(
+            "  \"quant_group_size\": {},\n",
+            self.quant_group_size
+        ));
+        s.push_str(&format!(
+            "  \"weight_format\": {},\n",
+            json_str(&self.weight_format)
+        ));
         s.push_str(&format!(
             "  \"training_weight_format\": {}",
             json_str(&self.training_weight_format)
@@ -233,14 +254,20 @@ impl ModelConfig {
         s.push_str(&format!("architecture: {}\n", &self.architecture));
         s.push_str(&format!("hidden_size: {}\n", self.hidden_size));
         s.push_str(&format!("num_layers: {}\n", self.num_layers));
-        s.push_str(&format!("num_attention_heads: {}\n", self.num_attention_heads));
+        s.push_str(&format!(
+            "num_attention_heads: {}\n",
+            self.num_attention_heads
+        ));
         s.push_str(&format!("num_kv_heads: {}\n", self.num_kv_heads));
         s.push_str(&format!("intermediate_size: {}\n", self.intermediate_size));
         s.push_str(&format!("vocab_size: {}\n", self.vocab_size));
         s.push_str(&format!("max_seq_len: {}\n", self.max_seq_len));
         s.push_str(&format!("rms_norm_eps: {}\n", self.rms_norm_eps));
         s.push_str(&format!("activation: {}\n", &self.activation));
-        s.push_str(&format!("positional_encoding: {}\n", &self.positional_encoding));
+        s.push_str(&format!(
+            "positional_encoding: {}\n",
+            &self.positional_encoding
+        ));
         s.push_str(&format!("rope_theta: {}\n", self.rope_theta));
         s.push_str(&format!("use_bias: {}\n", self.use_bias));
         s.push_str(&format!("quant_group_size: {}\n", self.quant_group_size));
@@ -268,9 +295,19 @@ impl ModelConfig {
         self.weight_format.eq_ignore_ascii_case("ternary")
     }
 
+    /// Whether the config stores true 1-bit binary-toggle weights for runtime.
+    pub fn uses_binary_runtime(&self) -> bool {
+        self.weight_format.eq_ignore_ascii_case("binary")
+    }
+
     /// Whether the config expects ternary (-1/0/+1) weights during training.
     pub fn uses_ternary_training(&self) -> bool {
         self.training_weight_format.eq_ignore_ascii_case("ternary")
+    }
+
+    /// Whether the config expects true 1-bit binary-toggle weights during training.
+    pub fn uses_binary_training(&self) -> bool {
+        self.training_weight_format.eq_ignore_ascii_case("binary")
     }
 }
 
@@ -304,7 +341,10 @@ fn extract_json_usize(json: &str, key: &str) -> Option<usize> {
     let colon = after.find(':')?;
     let after_colon = after[colon + 1..].trim_start();
     // Parse number until non-digit
-    let num_str: String = after_colon.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let num_str: String = after_colon
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     num_str.parse().ok()
 }
 
@@ -317,7 +357,9 @@ fn extract_json_f32(json: &str, key: &str) -> Option<f32> {
     let after_colon = after[colon + 1..].trim_start();
     let num_str: String = after_colon
         .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == 'e' || *c == 'E' || *c == '+')
+        .take_while(|c| {
+            c.is_ascii_digit() || *c == '.' || *c == '-' || *c == 'e' || *c == 'E' || *c == '+'
+        })
         .collect();
     num_str.parse().ok()
 }
@@ -350,8 +392,8 @@ mod tests {
         assert_eq!(config.hidden_size, 768);
         assert_eq!(config.num_layers, 12);
         assert_eq!(config.head_dim(), 64);
-        assert_eq!(config.weight_format, "ternary");
-        assert_eq!(config.training_weight_format, "ternary");
+        assert_eq!(config.weight_format, "binary");
+        assert_eq!(config.training_weight_format, "binary");
     }
 
     #[test]

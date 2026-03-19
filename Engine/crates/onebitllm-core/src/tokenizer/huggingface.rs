@@ -2,9 +2,9 @@ use std::path::Path;
 
 use tokenizers::Tokenizer as HfTokenizerInner;
 
-use crate::Result;
-use crate::error::OneBitError;
 use super::traits::{Encoding, Tokenizer};
+use crate::error::OneBitError;
+use crate::Result;
 
 /// HuggingFace Tokenizers adapter.
 ///
@@ -19,15 +19,22 @@ impl HuggingFaceTokenizer {
     ///
     /// Requires network access. Example: `"gpt2"`, `"bert-base-uncased"`.
     pub fn from_pretrained(model_name: &str) -> Result<Self> {
-        let inner = HfTokenizerInner::from_pretrained(model_name, None)
-            .map_err(|e| OneBitError::Tokenizer(format!("Failed to load pretrained tokenizer '{model_name}': {e}")))?;
+        let inner = HfTokenizerInner::from_pretrained(model_name, None).map_err(|e| {
+            OneBitError::Tokenizer(format!(
+                "Failed to load pretrained tokenizer '{model_name}': {e}"
+            ))
+        })?;
         Ok(Self { inner })
     }
 
     /// Load from a local `tokenizer.json` file.
     pub fn from_file(path: &Path) -> Result<Self> {
-        let inner = HfTokenizerInner::from_file(path)
-            .map_err(|e| OneBitError::Tokenizer(format!("Failed to load tokenizer from {}: {e}", path.display())))?;
+        let inner = HfTokenizerInner::from_file(path).map_err(|e| {
+            OneBitError::Tokenizer(format!(
+                "Failed to load tokenizer from {}: {e}",
+                path.display()
+            ))
+        })?;
         Ok(Self { inner })
     }
 }

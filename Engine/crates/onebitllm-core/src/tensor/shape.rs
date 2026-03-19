@@ -1,5 +1,5 @@
-use crate::Result;
 use crate::error::OneBitError;
+use crate::Result;
 
 /// Compute the flat index from multi-dimensional indices (row-major/C-order).
 pub fn ravel_index(indices: &[usize], shape: &[usize]) -> usize {
@@ -42,16 +42,8 @@ pub fn broadcast_shape(a: &[usize], b: &[usize]) -> Result<Vec<usize>> {
     let mut result = vec![0; max_ndim];
 
     for i in 0..max_ndim {
-        let da = if i < a.len() {
-            a[a.len() - 1 - i]
-        } else {
-            1
-        };
-        let db = if i < b.len() {
-            b[b.len() - 1 - i]
-        } else {
-            1
-        };
+        let da = if i < a.len() { a[a.len() - 1 - i] } else { 1 };
+        let db = if i < b.len() { b[b.len() - 1 - i] } else { 1 };
 
         if da == db {
             result[max_ndim - 1 - i] = da;

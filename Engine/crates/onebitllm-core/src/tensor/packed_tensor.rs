@@ -1,20 +1,103 @@
-use ndarray::{Array, Array2, IxDyn, Ix2};
+use ndarray::{Array, Array2, Ix2, IxDyn};
 
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
 
-use crate::Result;
-use crate::error::OneBitError;
-use crate::quant::{PackedTernary, QuantConfig, QuantGranularity, QuantParams, TernaryWeight};
 use super::shape;
+use crate::error::OneBitError;
+use crate::quant::{
+    effective_sign_from_toggle, toggle_bit_for_sign, PackedBinary, PackedTernary, QuantConfig,
+    QuantGranularity, QuantParams, TernaryWeight,
+};
+use crate::Result;
 
-/// A quantized tensor: stores ternary weights in bitpacked form alongside
-/// quantization parameters. Conceptually represents an ndarray of {-1, 0, +1}
-/// with associated scale factors.
+/// Packed runtime weight storage.
+#[derive(Debug, Clone)]
+pub enum PackedStorage {
+    /// Packed ternary weights in {-1, 0, +1}.
+    Ternary(PackedTernary),
+    /// Packed binary toggle bits with metadata-driven sign reconstruction.
+    Binary {
+        data: PackedBinary,
+        equalizer_seed: u64,
+    },
+}
+
+/// Runtime weight format represented by a packed tensor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackedWeightFormat {
+    Ternary,
+    Binary,
+}
+
+/// Scale layout presented to low-level packed-matmul kernels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackedScaleLayout {
+    /// One scale for the full tensor.
+    PerTensor,
+    /// One scale per output row/channel.
+    PerRow,
+    /// Consecutive flat groups share a scale.
+    PerGroup { group_size: usize },
+}
+
+/// Borrowed 2D packed-weight view for backend kernels.
+///
+/// This keeps the Rust-side quantization layout explicit so device backends can
+/// launch kernels without re-deriving row/scale/equalizer metadata ad hoc.
+#[derive(Debug, Clone)]
+pub struct PackedTensorKernelLayout<'a> {
+    pub weight_format: PackedWeightFormat,
+    pub scale_layout: PackedScaleLayout,
+    pub rows: usize,
+    pub cols: usize,
+    pub bits_per_weight: u8,
+    pub packed_words: &'a [u64],
+    pub scales: &'a [f32],
+    pub equalizer_seed: Option<u64>,
+}
+
+impl PackedTensorKernelLayout<'_> {
+    pub fn describe(&self) -> String {
+        let format = match self.weight_format {
+            PackedWeightFormat::Ternary => "ternary",
+            PackedWeightFormat::Binary => "binary",
+        };
+        let scale_layout = match self.scale_layout {
+            PackedScaleLayout::PerTensor => "per-tensor".to_string(),
+            PackedScaleLayout::PerRow => "per-row".to_string(),
+            PackedScaleLayout::PerGroup { group_size } => format!("per-group:{group_size}"),
+        };
+        match self.equalizer_seed {
+            Some(seed) => format!(
+                "{format} {}x{} {}-bit words={} scales={} scale_layout={} equalizer_seed={seed}",
+                self.rows,
+                self.cols,
+                self.bits_per_weight,
+                self.packed_words.len(),
+                self.scales.len(),
+                scale_layout
+            ),
+            None => format!(
+                "{format} {}x{} {}-bit words={} scales={} scale_layout={}",
+                self.rows,
+                self.cols,
+                self.bits_per_weight,
+                self.packed_words.len(),
+                self.scales.len(),
+                scale_layout
+            ),
+        }
+    }
+}
+
+/// A quantized tensor: stores packed runtime weights alongside quantization
+/// parameters. Conceptually represents an ndarray of signed low-bit values with
+/// associated scale factors.
 #[derive(Debug, Clone)]
 pub struct PackedTensor {
-    /// Packed ternary data (flat, row-major).
-    packed: PackedTernary,
+    /// Packed data (flat, row-major).
+    packed: PackedStorage,
     /// Shape of the logical tensor.
     shape: Vec<usize>,
     /// Quantization parameters (scales, zero-points).
@@ -22,17 +105,20 @@ pub struct PackedTensor {
 }
 
 impl PackedTensor {
-    /// Rebuild a packed tensor from serialized pieces.
-    pub fn from_parts(
-        packed: PackedTernary,
+    fn from_storage(
+        packed: PackedStorage,
         shape: Vec<usize>,
         quant_params: QuantParams,
     ) -> Result<Self> {
         let total_elements: usize = shape.iter().product();
-        if packed.len() != total_elements {
+        let packed_len = match &packed {
+            PackedStorage::Ternary(data) => data.len(),
+            PackedStorage::Binary { data, .. } => data.len(),
+        };
+        if packed_len != total_elements {
             return Err(OneBitError::ShapeMismatch {
                 expected: vec![total_elements],
-                got: vec![packed.len()],
+                got: vec![packed_len],
             });
         }
         if quant_params.original_shape != shape {
@@ -46,6 +132,32 @@ impl PackedTensor {
             shape: quant_params.original_shape.clone(),
             quant_params,
         })
+    }
+
+    /// Rebuild a ternary packed tensor from serialized pieces.
+    pub fn from_parts(
+        packed: PackedTernary,
+        shape: Vec<usize>,
+        quant_params: QuantParams,
+    ) -> Result<Self> {
+        Self::from_storage(PackedStorage::Ternary(packed), shape, quant_params)
+    }
+
+    /// Rebuild a binary packed tensor from serialized pieces.
+    pub fn from_binary_parts(
+        packed: PackedBinary,
+        shape: Vec<usize>,
+        quant_params: QuantParams,
+        equalizer_seed: u64,
+    ) -> Result<Self> {
+        Self::from_storage(
+            PackedStorage::Binary {
+                data: packed,
+                equalizer_seed,
+            },
+            shape,
+            quant_params,
+        )
     }
 
     /// Create from an f32 ndarray by quantizing.
@@ -84,11 +196,36 @@ impl PackedTensor {
 
         let packed = PackedTernary::from_ternary_slice(&ternary);
 
-        Self {
-            packed,
-            shape,
-            quant_params,
-        }
+        Self::from_storage(PackedStorage::Ternary(packed), shape, quant_params)
+            .expect("ternary quantization should produce a valid packed tensor")
+    }
+
+    /// Create from an f32 ndarray by packing true 1-bit toggle weights.
+    pub fn from_binary_ndarray(
+        arr: &Array<f32, IxDyn>,
+        granularity: QuantGranularity,
+        equalizer_seed: u64,
+    ) -> Self {
+        let shape = arr.shape().to_vec();
+        let flat: Vec<f32> = arr.iter().copied().collect();
+        let quant_params = QuantParams::compute(
+            &flat,
+            &shape,
+            &QuantConfig {
+                granularity,
+                use_zero_point: false,
+                learnable_scale: false,
+            },
+        );
+        let bits: Vec<bool> = flat
+            .iter()
+            .enumerate()
+            .map(|(index, &value)| toggle_bit_for_sign(value >= 0.0, equalizer_seed, index))
+            .collect();
+        let packed = PackedBinary::from_bool_slice(&bits);
+
+        Self::from_binary_parts(packed, shape, quant_params, equalizer_seed)
+            .expect("binary quantization should produce a valid packed tensor")
     }
 
     /// Create from a 2D f32 array (most common: weight matrices).
@@ -121,7 +258,9 @@ impl PackedTensor {
         let scale_count = match granularity {
             QuantGranularity::PerTensor => 1,
             QuantGranularity::PerChannel => shape.first().copied().ok_or_else(|| {
-                OneBitError::Quantization("per-channel ternary packing requires a non-empty shape".into())
+                OneBitError::Quantization(
+                    "per-channel ternary packing requires a non-empty shape".into(),
+                )
             })?,
             QuantGranularity::PerGroup(group_size) => {
                 if group_size == 0 {
@@ -133,16 +272,16 @@ impl PackedTensor {
             }
         };
 
-        Ok(Self {
-            packed: PackedTernary::from_ternary_slice(&ternary),
-            shape: shape.clone(),
-            quant_params: QuantParams {
+        Self::from_storage(
+            PackedStorage::Ternary(PackedTernary::from_ternary_slice(&ternary)),
+            shape.clone(),
+            QuantParams {
                 scales: vec![1.0; scale_count],
                 zero_points: Vec::new(),
                 original_shape: shape,
                 granularity,
             },
-        })
+        )
     }
 
     /// Dequantize back to f32 ndarray.
@@ -153,13 +292,18 @@ impl PackedTensor {
         let mut flat = Vec::with_capacity(total);
 
         for i in 0..total {
-            let w = self.packed.get(i);
             let scale = self.quant_params.scale_for_index(i);
-            flat.push(w.to_f32() * scale);
+            let value = match &self.packed {
+                PackedStorage::Ternary(packed) => packed.get(i).to_f32() * scale,
+                PackedStorage::Binary {
+                    data,
+                    equalizer_seed,
+                } => effective_sign_from_toggle(data.get(i), *equalizer_seed, i) * scale,
+            };
+            flat.push(value);
         }
 
-        Array::from_shape_vec(IxDyn(&self.shape), flat)
-            .expect("shape mismatch in dequantization")
+        Array::from_shape_vec(IxDyn(&self.shape), flat).expect("shape mismatch in dequantization")
     }
 
     /// Shape of the tensor.
@@ -214,15 +358,21 @@ impl PackedTensor {
 
         // Dequantize, slice in ndarray, re-quantize
         let arr = self.to_ndarray();
-        let sliced = arr.slice_axis(
-            ndarray::Axis(dim),
-            ndarray::Slice::from(start..end),
-        );
+        let sliced = arr.slice_axis(ndarray::Axis(dim), ndarray::Slice::from(start..end));
         let owned = sliced.to_owned();
 
-        // Rebuild with per-tensor quantization for simplicity
-        let config = QuantConfig::per_tensor();
-        Ok(Self::from_ndarray(&owned, &config))
+        Ok(match &self.packed {
+            PackedStorage::Ternary(_) => {
+                let config = QuantConfig {
+                    granularity: self.quant_params.granularity,
+                    ..QuantConfig::default()
+                };
+                Self::from_ndarray(&owned, &config)
+            }
+            PackedStorage::Binary { equalizer_seed, .. } => {
+                Self::from_binary_ndarray(&owned, self.quant_params.granularity, *equalizer_seed)
+            }
+        })
     }
 
     /// Transpose a 2D tensor.
@@ -240,11 +390,20 @@ impl PackedTensor {
             .map_err(|e| OneBitError::TensorOp(e.to_string()))?;
         let transposed = arr2.t().to_owned();
 
-        let config = QuantConfig {
-            granularity: self.quant_params.granularity,
-            ..QuantConfig::default()
-        };
-        Ok(Self::from_array2(&transposed, &config))
+        Ok(match &self.packed {
+            PackedStorage::Ternary(_) => {
+                let config = QuantConfig {
+                    granularity: self.quant_params.granularity,
+                    ..QuantConfig::default()
+                };
+                Self::from_array2(&transposed, &config)
+            }
+            PackedStorage::Binary { equalizer_seed, .. } => Self::from_binary_ndarray(
+                &transposed.into_dyn(),
+                self.quant_params.granularity,
+                *equalizer_seed,
+            ),
+        })
     }
 
     /// Matrix-vector product: self (M x N packed) * input (N,) f32 -> output (M,) f32.
@@ -275,9 +434,7 @@ impl PackedTensor {
             .collect();
 
         #[cfg(not(feature = "rayon"))]
-        let output: Vec<f32> = (0..m)
-            .map(|row| self.row_dot(row, &input_flat))
-            .collect();
+        let output: Vec<f32> = (0..m).map(|row| self.row_dot(row, &input_flat)).collect();
 
         Ok(Array::from_shape_vec(IxDyn(&[m]), output).unwrap())
     }
@@ -319,12 +476,22 @@ impl PackedTensor {
         #[cfg(feature = "rayon")]
         let rows: Vec<Vec<f32>> = (0..m)
             .into_par_iter()
-            .map(|row| rhs_columns.iter().map(|col| self.row_dot(row, col)).collect())
+            .map(|row| {
+                rhs_columns
+                    .iter()
+                    .map(|col| self.row_dot(row, col))
+                    .collect()
+            })
             .collect();
 
         #[cfg(not(feature = "rayon"))]
         let rows: Vec<Vec<f32>> = (0..m)
-            .map(|row| rhs_columns.iter().map(|col| self.row_dot(row, col)).collect())
+            .map(|row| {
+                rhs_columns
+                    .iter()
+                    .map(|col| self.row_dot(row, col))
+                    .collect()
+            })
             .collect();
 
         let flat: Vec<f32> = rows.into_iter().flatten().collect();
@@ -396,9 +563,36 @@ impl PackedTensor {
         Ok(result.into_dyn())
     }
 
-    /// Access raw packed data.
-    pub fn packed_data(&self) -> &PackedTernary {
-        &self.packed
+    /// Runtime weight format stored in this tensor.
+    pub fn weight_format(&self) -> PackedWeightFormat {
+        match &self.packed {
+            PackedStorage::Ternary(_) => PackedWeightFormat::Ternary,
+            PackedStorage::Binary { .. } => PackedWeightFormat::Binary,
+        }
+    }
+
+    /// Access packed ternary data when the tensor stores ternary weights.
+    pub fn ternary_data(&self) -> Option<&PackedTernary> {
+        match &self.packed {
+            PackedStorage::Ternary(data) => Some(data),
+            PackedStorage::Binary { .. } => None,
+        }
+    }
+
+    /// Access packed binary data when the tensor stores true 1-bit weights.
+    pub fn binary_data(&self) -> Option<&PackedBinary> {
+        match &self.packed {
+            PackedStorage::Ternary(_) => None,
+            PackedStorage::Binary { data, .. } => Some(data),
+        }
+    }
+
+    /// Equalizer seed used for binary metadata-driven sign reconstruction.
+    pub fn equalizer_seed(&self) -> Option<u64> {
+        match &self.packed {
+            PackedStorage::Ternary(_) => None,
+            PackedStorage::Binary { equalizer_seed, .. } => Some(*equalizer_seed),
+        }
     }
 
     /// Access quantization params.
@@ -406,43 +600,94 @@ impl PackedTensor {
         &self.quant_params
     }
 
+    /// Borrow this tensor as a 2D kernel-friendly packed layout.
+    pub fn kernel_layout_2d(&self) -> Result<PackedTensorKernelLayout<'_>> {
+        if self.shape.len() != 2 {
+            return Err(OneBitError::TensorOp(format!(
+                "kernel_layout_2d requires a 2D packed tensor, got {}D",
+                self.shape.len()
+            )));
+        }
+
+        let rows = self.shape[0];
+        let cols = self.shape[1];
+        let scale_layout = match self.quant_params.granularity {
+            QuantGranularity::PerTensor => PackedScaleLayout::PerTensor,
+            QuantGranularity::PerChannel => PackedScaleLayout::PerRow,
+            QuantGranularity::PerGroup(group_size) => PackedScaleLayout::PerGroup { group_size },
+        };
+
+        let layout = match &self.packed {
+            PackedStorage::Ternary(data) => PackedTensorKernelLayout {
+                weight_format: PackedWeightFormat::Ternary,
+                scale_layout,
+                rows,
+                cols,
+                bits_per_weight: 2,
+                packed_words: data.raw_data(),
+                scales: &self.quant_params.scales,
+                equalizer_seed: None,
+            },
+            PackedStorage::Binary {
+                data,
+                equalizer_seed,
+            } => PackedTensorKernelLayout {
+                weight_format: PackedWeightFormat::Binary,
+                scale_layout,
+                rows,
+                cols,
+                bits_per_weight: 1,
+                packed_words: data.raw_data(),
+                scales: &self.quant_params.scales,
+                equalizer_seed: Some(*equalizer_seed),
+            },
+        };
+
+        Ok(layout)
+    }
+
     /// Memory usage in bytes (packed data only).
     pub fn memory_bytes(&self) -> usize {
-        self.packed.memory_bytes()
+        match &self.packed {
+            PackedStorage::Ternary(data) => data.memory_bytes(),
+            PackedStorage::Binary { data, .. } => data.memory_bytes(),
+        }
     }
 
     fn row_dot(&self, row: usize, input: &[f32]) -> f32 {
         let n = self.shape[1];
         let row_start = row * n;
 
-        match self.quant_params.granularity {
-            QuantGranularity::PerTensor => {
-                self.packed
+        match &self.packed {
+            PackedStorage::Ternary(packed) => match self.quant_params.granularity {
+                QuantGranularity::PerTensor => packed
                     .dot_slice_f32(row_start, input, self.quant_params.scales[0])
-                    .expect("validated packed row slice should fit input")
-            }
-            QuantGranularity::PerChannel if self.shape.len() == 2 => {
-                self.packed
+                    .expect("validated packed row slice should fit input"),
+                QuantGranularity::PerChannel if self.shape.len() == 2 => packed
                     .dot_slice_f32(row_start, input, self.quant_params.scales[row])
-                    .expect("validated packed row slice should fit input")
-            }
-            QuantGranularity::PerGroup(_) => {
-                let mut acc = 0.0f32;
-                for (col, &value) in input.iter().enumerate() {
-                    let flat_idx = row_start + col;
-                    let w = self.packed.get(flat_idx);
-                    let scale = self.quant_params.scale_for_index(flat_idx);
-                    acc += w.to_f32() * scale * value;
+                    .expect("validated packed row slice should fit input"),
+                QuantGranularity::PerGroup(_) | QuantGranularity::PerChannel => {
+                    let mut acc = 0.0f32;
+                    for (col, &value) in input.iter().enumerate() {
+                        let flat_idx = row_start + col;
+                        let w = packed.get(flat_idx);
+                        let scale = self.quant_params.scale_for_index(flat_idx);
+                        acc += w.to_f32() * scale * value;
+                    }
+                    acc
                 }
-                acc
-            }
-            QuantGranularity::PerChannel => {
+            },
+            PackedStorage::Binary {
+                data,
+                equalizer_seed,
+            } => {
                 let mut acc = 0.0f32;
                 for (col, &value) in input.iter().enumerate() {
                     let flat_idx = row_start + col;
-                    let w = self.packed.get(flat_idx);
+                    let sign =
+                        effective_sign_from_toggle(data.get(flat_idx), *equalizer_seed, flat_idx);
                     let scale = self.quant_params.scale_for_index(flat_idx);
-                    acc += w.to_f32() * scale * value;
+                    acc += sign * scale * value;
                 }
                 acc
             }
@@ -493,8 +738,8 @@ mod tests {
     #[test]
     fn test_from_unit_ternary_ndarray_keeps_unit_scale() {
         let arr = array![[1.0f32, -1.0], [0.0, 1.0]].into_dyn();
-        let packed = PackedTensor::from_unit_ternary_ndarray(&arr, QuantGranularity::PerTensor)
-            .unwrap();
+        let packed =
+            PackedTensor::from_unit_ternary_ndarray(&arr, QuantGranularity::PerTensor).unwrap();
         assert_eq!(packed.quant_params().scales, vec![1.0]);
         assert_eq!(packed.to_ndarray(), arr);
     }
@@ -502,15 +747,69 @@ mod tests {
     #[test]
     fn test_from_parts_roundtrip() {
         let arr = array![[1.0f32, -1.0], [0.0, 1.0]].into_dyn();
-        let packed = PackedTensor::from_unit_ternary_ndarray(&arr, QuantGranularity::PerTensor)
-            .unwrap();
+        let packed =
+            PackedTensor::from_unit_ternary_ndarray(&arr, QuantGranularity::PerTensor).unwrap();
         let rebuilt = PackedTensor::from_parts(
-            packed.packed_data().clone(),
+            packed.ternary_data().unwrap().clone(),
             packed.shape().to_vec(),
             packed.quant_params().clone(),
         )
         .unwrap();
         assert_eq!(rebuilt.to_ndarray(), arr);
+    }
+
+    #[test]
+    fn test_binary_roundtrip_preserves_effective_signs() {
+        let arr = array![[2.0f32, -3.0], [-0.5, 1.5]].into_dyn();
+        let seed = 0x1B17_EA11_u64;
+        let packed = PackedTensor::from_binary_ndarray(&arr, QuantGranularity::PerTensor, seed);
+
+        assert_eq!(packed.weight_format(), PackedWeightFormat::Binary);
+        assert_eq!(packed.equalizer_seed(), Some(seed));
+        let rebuilt = packed.to_ndarray();
+
+        for (original, restored) in arr.iter().zip(rebuilt.iter()) {
+            assert_eq!(original.is_sign_positive(), restored.is_sign_positive());
+        }
+    }
+
+    #[test]
+    fn test_kernel_layout_2d_binary_exposes_equalizer_metadata() {
+        let arr = array![[2.0f32, -3.0], [-0.5, 1.5]].into_dyn();
+        let seed = 0x1B17_EA11_u64;
+        let packed = PackedTensor::from_binary_ndarray(&arr, QuantGranularity::PerTensor, seed);
+
+        let layout = packed.kernel_layout_2d().unwrap();
+        assert_eq!(layout.weight_format, PackedWeightFormat::Binary);
+        assert_eq!(layout.scale_layout, PackedScaleLayout::PerTensor);
+        assert_eq!(layout.rows, 2);
+        assert_eq!(layout.cols, 2);
+        assert_eq!(layout.bits_per_weight, 1);
+        assert_eq!(layout.equalizer_seed, Some(seed));
+        assert_eq!(layout.scales.len(), 1);
+        assert!(!layout.packed_words.is_empty());
+    }
+
+    #[test]
+    fn test_kernel_layout_2d_per_channel_maps_to_per_row() {
+        let arr = array![[10.0f32, -10.0, 0.0], [0.1, -0.1, 0.0]].into_dyn();
+        let packed = PackedTensor::from_ndarray(&arr, &QuantConfig::per_channel());
+
+        let layout = packed.kernel_layout_2d().unwrap();
+        assert_eq!(layout.weight_format, PackedWeightFormat::Ternary);
+        assert_eq!(layout.scale_layout, PackedScaleLayout::PerRow);
+        assert_eq!(layout.rows, 2);
+        assert_eq!(layout.cols, 3);
+        assert_eq!(layout.bits_per_weight, 2);
+        assert_eq!(layout.equalizer_seed, None);
+        assert_eq!(layout.scales.len(), 2);
+    }
+
+    #[test]
+    fn test_kernel_layout_2d_rejects_non_matrix() {
+        let arr = Array::from_elem(IxDyn(&[2, 2, 2]), 1.0f32);
+        let packed = PackedTensor::from_ndarray(&arr, &QuantConfig::per_tensor());
+        assert!(packed.kernel_layout_2d().is_err());
     }
 
     #[test]
@@ -592,11 +891,7 @@ mod tests {
 
     #[test]
     fn test_per_channel_quantization() {
-        let arr = array![
-            [10.0f32, -10.0, 0.0],
-            [0.1, -0.1, 0.0]
-        ]
-        .into_dyn();
+        let arr = array![[10.0f32, -10.0, 0.0], [0.1, -0.1, 0.0]].into_dyn();
         let config = QuantConfig::per_channel();
         let packed = PackedTensor::from_ndarray(&arr, &config);
 

@@ -4,8 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import gzip
+import io
+import json
 from pathlib import Path
 import sys
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from config import (
     RustModelConfig,
@@ -40,6 +45,8 @@ REDPAJAMA_PARTITION = "head_middle"
 REDPAJAMA_SNAPSHOTS = ("2023-06", "2022-49")
 REDPAJAMA_LANGUAGES = ("en", "de")
 REDPAJAMA_TEXT_FIELDS = ("raw_content", "text", "content")
+REDPAJAMA_URL_BASE = "https://data.together.xyz/redpajama-data-v2/v1.0.0"
+REDPAJAMA_NUM_SHARDS = 5000
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,12 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--train-weight-format",
         default="same-as-config",
-        choices=("same-as-config", "fp32", "ternary"),
+        choices=("same-as-config", "fp32", "binary", "ternary"),
     )
     parser.add_argument(
         "--save-weight-format",
         default="same-as-train",
-        choices=("same-as-train", "fp32", "ternary"),
+        choices=("same-as-train", "fp32", "binary", "ternary"),
     )
     parser.add_argument("--distill-alpha", type=float, default=0.0)
     parser.add_argument("--distill-temperature", type=float, default=1.0)
@@ -133,14 +140,6 @@ def _extract_redpajama_text(record: object) -> str | None:
 
 
 def _materialize_redpajama_corpus(output_dir: str | Path, split_name: str) -> Path:
-    try:
-        from datasets import load_dataset
-    except ImportError as exc:
-        raise SystemExit(
-            "The HuggingFace `datasets` package is required for `--data RedPajama`. "
-            "Install it with `python3 -m pip install datasets`."
-        ) from exc
-
     output_root = Path(output_dir).expanduser()
     output_root.mkdir(parents=True, exist_ok=True)
     corpus_path = output_root / f"redpajama_{split_name}.txt"
@@ -148,45 +147,130 @@ def _materialize_redpajama_corpus(output_dir: str | Path, split_name: str) -> Pa
         print(f"Reusing materialized RedPajama corpus at {corpus_path}")
         return corpus_path
 
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        load_dataset = None
+
     print(
         "Loading RedPajama dataset via HuggingFace with "
         f"partition={REDPAJAMA_PARTITION}, "
         f"snapshots={list(REDPAJAMA_SNAPSHOTS)}, "
         f"languages={list(REDPAJAMA_LANGUAGES)}"
     )
-    dataset = load_dataset(
-        "togethercomputer/RedPajama-Data-V2",
-        name="default",
-        partition=REDPAJAMA_PARTITION,
-        snapshots=list(REDPAJAMA_SNAPSHOTS),
-        languages=list(REDPAJAMA_LANGUAGES),
+    if load_dataset is not None:
+        try:
+            dataset = load_dataset(
+                "togethercomputer/RedPajama-Data-V2",
+                name="default",
+                partition=REDPAJAMA_PARTITION,
+                snapshots=list(REDPAJAMA_SNAPSHOTS),
+                languages=list(REDPAJAMA_LANGUAGES),
+            )
+            if isinstance(dataset, dict):
+                records = dataset.get("train")
+            else:
+                records = dataset
+
+            if records is None:
+                raise SystemExit("RedPajama loader did not return a usable dataset split.")
+
+            written = 0
+            with corpus_path.open("w", encoding="utf-8") as handle:
+                for record in records:
+                    text = _extract_redpajama_text(record)
+                    if not text:
+                        continue
+                    handle.write(text)
+                    handle.write("\n")
+                    written += 1
+
+            if written == 0:
+                raise SystemExit(
+                    "RedPajama dataset loaded, but no text records were found in fields "
+                    f"{', '.join(REDPAJAMA_TEXT_FIELDS)}."
+                )
+
+            print(f"Materialized {written} RedPajama documents to {corpus_path}")
+            return corpus_path
+        except RuntimeError as exc:
+            if "dataset scripts are no longer supported" not in str(exc).lower():
+                raise
+            print(
+                "Installed `datasets` cannot execute the RedPajama loader script. "
+                "Falling back to direct shard download."
+            )
+
+    return _materialize_redpajama_corpus_direct(corpus_path)
+
+
+def _iter_redpajama_document_urls() -> list[str]:
+    partitions = ("head", "middle") if REDPAJAMA_PARTITION == "head_middle" else (REDPAJAMA_PARTITION,)
+    urls: list[str] = []
+    for language in REDPAJAMA_LANGUAGES:
+        for snapshot in REDPAJAMA_SNAPSHOTS:
+            for partition in partitions:
+                for shard_idx in range(REDPAJAMA_NUM_SHARDS):
+                    base_tag = f"{snapshot}/{shard_idx:04d}/{language}_{partition}"
+                    urls.append(f"{REDPAJAMA_URL_BASE}/documents/{base_tag}.json.gz")
+    return urls
+
+
+def _materialize_redpajama_corpus_direct(corpus_path: Path) -> Path:
+    urls = _iter_redpajama_document_urls()
+    docs_written = 0
+    files_downloaded = 0
+    files_missing = 0
+
+    print(
+        "Streaming RedPajama document shards directly from Together storage. "
+        f"Candidate shard files: {len(urls)}"
     )
 
-    if isinstance(dataset, dict):
-        records = dataset.get("train")
-    else:
-        records = dataset
-
-    if records is None:
-        raise SystemExit("RedPajama loader did not return a usable dataset split.")
-
-    written = 0
     with corpus_path.open("w", encoding="utf-8") as handle:
-        for record in records:
-            text = _extract_redpajama_text(record)
-            if not text:
-                continue
-            handle.write(text)
-            handle.write("\n")
-            written += 1
+        for idx, url in enumerate(urls, start=1):
+            try:
+                response = urllib_request.urlopen(url, timeout=60)
+            except urllib_error.HTTPError as exc:
+                if exc.code == 404:
+                    files_missing += 1
+                    continue
+                raise SystemExit(f"Failed downloading {url}: HTTP {exc.code}") from exc
+            except urllib_error.URLError as exc:
+                raise SystemExit(f"Failed downloading {url}: {exc.reason}") from exc
 
-    if written == 0:
+            files_downloaded += 1
+            with response:
+                with gzip.GzipFile(fileobj=response) as gz_file:
+                    with io.TextIOWrapper(gz_file, encoding="utf-8") as reader:
+                        for line in reader:
+                            if not line.strip():
+                                continue
+                            record = json.loads(line)
+                            text = _extract_redpajama_text(record)
+                            if not text:
+                                continue
+                            handle.write(text)
+                            handle.write("\n")
+                            docs_written += 1
+
+            if files_downloaded % 25 == 0:
+                print(
+                    f"Processed {files_downloaded} RedPajama shard files "
+                    f"({files_missing} missing, {docs_written} docs written, last url {idx}/{len(urls)})"
+                )
+
+    if docs_written == 0:
         raise SystemExit(
-            "RedPajama dataset loaded, but no text records were found in fields "
-            f"{', '.join(REDPAJAMA_TEXT_FIELDS)}."
+            "RedPajama direct download completed, but no text records were written. "
+            "If this machine has a modern `datasets` install and outbound network restrictions, "
+            "either allow access to `data.together.xyz` or install `datasets<4`."
         )
 
-    print(f"Materialized {written} RedPajama documents to {corpus_path}")
+    print(
+        f"Materialized {docs_written} RedPajama documents from {files_downloaded} shard files "
+        f"to {corpus_path}"
+    )
     return corpus_path
 
 

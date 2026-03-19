@@ -1,8 +1,8 @@
-use ndarray::{Array, IxDyn, Ix2};
+use ndarray::{Array, Ix2, IxDyn};
 
-use crate::Result;
-use crate::error::OneBitError;
 use super::packed_tensor::PackedTensor;
+use crate::error::OneBitError;
+use crate::Result;
 
 /// Dense f32 matrix * packed ternary matrix.
 ///
@@ -60,8 +60,8 @@ pub fn packed_add(a: &PackedTensor, b: &PackedTensor) -> Result<Array<f32, IxDyn
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::array;
     use crate::quant::QuantConfig;
+    use ndarray::array;
 
     #[test]
     fn test_matmul_dense_packed() {

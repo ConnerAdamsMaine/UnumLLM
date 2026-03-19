@@ -87,7 +87,8 @@ impl PyGenerateConfig {
     ) -> Self {
         Self {
             max_new_tokens,
-            sampling: sampling.unwrap_or_else(|| PySamplingConfig::new(0.7, None, None, None, None)),
+            sampling: sampling
+                .unwrap_or_else(|| PySamplingConfig::new(0.7, None, None, None, None)),
             stop_tokens: stop_tokens.unwrap_or_default(),
         }
     }
@@ -167,8 +168,8 @@ impl PyModelConfig {
         vocab_size=32000,
         max_seq_len=2048,
         activation="silu".to_string(),
-        weight_format="ternary".to_string(),
-        training_weight_format="ternary".to_string(),
+        weight_format="binary".to_string(),
+        training_weight_format="binary".to_string(),
     ))]
     fn new(
         architecture: String,
@@ -213,7 +214,8 @@ impl PyModelConfig {
         let core_config = self.to_core();
         let file = std::fs::File::create(path)
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-        core_config.save_json(file)
+        core_config
+            .save_json(file)
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         Ok(())
     }
@@ -221,8 +223,11 @@ impl PyModelConfig {
     fn __repr__(&self) -> String {
         format!(
             "ModelConfig(arch='{}', hidden={}, layers={}, heads={}, vocab={})",
-            self.architecture, self.hidden_size, self.num_layers,
-            self.num_attention_heads, self.vocab_size
+            self.architecture,
+            self.hidden_size,
+            self.num_layers,
+            self.num_attention_heads,
+            self.vocab_size
         )
     }
 }

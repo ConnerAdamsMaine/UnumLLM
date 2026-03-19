@@ -40,9 +40,6 @@ Received prompt {:?} with max_new_tokens={}.",
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "Generator(max_new_tokens={})",
-            self.config.max_new_tokens
-        )
+        format!("Generator(max_new_tokens={})", self.config.max_new_tokens)
     }
 }

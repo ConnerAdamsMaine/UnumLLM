@@ -1,9 +1,9 @@
-use ndarray::{Array, IxDyn, Ix2};
+use ndarray::{Array, Ix2, IxDyn};
 
-use crate::Result;
+use super::traits::ComputeBackend;
 use crate::error::OneBitError;
 use crate::tensor::PackedTensor;
-use super::traits::ComputeBackend;
+use crate::Result;
 
 /// CPU compute backend using ndarray and bitpacked operations.
 pub struct CpuBackend;
@@ -57,8 +57,8 @@ impl ComputeBackend for CpuBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::array;
     use crate::quant::QuantConfig;
+    use ndarray::array;
 
     #[test]
     fn test_cpu_backend_packed_matmul() {

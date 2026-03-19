@@ -1,30 +1,51 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use ndarray::{Array, Ix2, IxDyn};
-use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
+use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
+use serde_json::Value;
 
+use onebitllm_core::autograd::{ops, Variable};
 use onebitllm_core::backend::ComputeBackend;
-use onebitllm_core::autograd::{Variable, ops};
 use onebitllm_core::infer::{Sampler, SamplingConfig};
 use onebitllm_core::io::custom::{ObmTensor, TensorFormat};
 use onebitllm_core::io::{ModelConfig, ObmFile};
 use onebitllm_core::nn::Parameter;
-use onebitllm_core::optim::Optimizer;
 use onebitllm_core::optim::adamw::AdamW;
 use onebitllm_core::optim::scheduler::{CosineScheduler, LrScheduler, WarmupScheduler};
-use onebitllm_core::quant::{PackedTernary, QuantConfig, QuantGranularity, QuantParams};
+use onebitllm_core::optim::Optimizer;
+use onebitllm_core::quant::{
+    PackedBinary, PackedTernary, QuantConfig, QuantGranularity, QuantParams,
+};
 use onebitllm_core::tensor::PackedTensor;
 use onebitllm_core::train::loop_::{TrainConfig, Trainer};
 
 pub const BIGRAM_ARCHITECTURE: &str = "bigram";
 pub const BIGRAM_WEIGHT_TENSOR: &str = "bigram.weight";
 pub const WEIGHT_FORMAT_FP32: &str = "fp32";
+pub const WEIGHT_FORMAT_BINARY: &str = "binary";
 pub const WEIGHT_FORMAT_TERNARY: &str = "ternary";
 
 const META_BIGRAM_WEIGHT_GRANULARITY: &str = "bigram_weight_granularity";
 const META_BIGRAM_WEIGHT_SCALES: &str = "bigram_weight_scales";
+const META_BIGRAM_WEIGHT_EQUALIZER_SEED: &str = "bigram_weight_equalizer_seed";
+const DEFAULT_BIGRAM_EQUALIZER_SEED: u64 = 0x1B17_EA11;
+const JSON_TEXT_KEYS: &[&str] = &[
+    "text",
+    "content",
+    "prompt",
+    "completion",
+    "response",
+    "answer",
+    "question",
+    "instruction",
+    "input",
+    "output",
+    "title",
+    "body",
+    "message",
+];
 
 #[derive(Debug, Clone)]
 pub struct LoadedBigramModel {
@@ -77,8 +98,9 @@ pub fn is_bigram_architecture(architecture: &str) -> bool {
 pub fn normalize_weight_format(value: &str) -> anyhow::Result<String> {
     match value.trim().to_ascii_lowercase().as_str() {
         WEIGHT_FORMAT_FP32 => Ok(WEIGHT_FORMAT_FP32.into()),
+        WEIGHT_FORMAT_BINARY => Ok(WEIGHT_FORMAT_BINARY.into()),
         WEIGHT_FORMAT_TERNARY => Ok(WEIGHT_FORMAT_TERNARY.into()),
-        other => bail!("unknown weight format `{other}`. Use `fp32` or `ternary`."),
+        other => bail!("unknown weight format `{other}`. Use `fp32`, `binary`, or `ternary`."),
     }
 }
 
@@ -198,6 +220,15 @@ fn parse_packed_granularity(config: &ModelConfig) -> anyhow::Result<QuantGranula
     parse_granularity_metadata(raw)
 }
 
+fn binary_equalizer_seed(config: &ModelConfig) -> anyhow::Result<u64> {
+    match config.metadata.get(META_BIGRAM_WEIGHT_EQUALIZER_SEED) {
+        Some(raw) => raw
+            .parse::<u64>()
+            .with_context(|| format!("invalid serialized binary equalizer seed `{raw}`")),
+        None => Ok(DEFAULT_BIGRAM_EQUALIZER_SEED),
+    }
+}
+
 fn quant_config(granularity: QuantGranularity) -> QuantConfig {
     QuantConfig {
         granularity,
@@ -264,21 +295,41 @@ fn packed_tensor_from_obm_tensor(
         );
     }
 
-    let packed = PackedTernary::from_raw_parts(
-        tensor.as_packed_u64()?,
-        tensor.shape.iter().product(),
-    )?;
-    PackedTensor::from_parts(
-        packed,
-        tensor.shape.clone(),
-        QuantParams {
-            scales,
-            zero_points: Vec::new(),
-            original_shape: tensor.shape.clone(),
-            granularity,
-        },
-    )
-    .map_err(|e| anyhow::anyhow!("failed to rebuild packed bigram tensor: {e}"))
+    let quant_params = QuantParams {
+        scales,
+        zero_points: Vec::new(),
+        original_shape: tensor.shape.clone(),
+        granularity,
+    };
+
+    match tensor.format {
+        TensorFormat::BitpackedTernary => {
+            let packed = PackedTernary::from_raw_parts(
+                tensor.as_packed_u64()?,
+                tensor.shape.iter().product(),
+            )?;
+            PackedTensor::from_parts(packed, tensor.shape.clone(), quant_params)
+                .map_err(|e| anyhow::anyhow!("failed to rebuild packed bigram tensor: {e}"))
+        }
+        TensorFormat::BitpackedBinary => {
+            let packed = PackedBinary::from_raw_parts(
+                tensor.as_packed_u64()?,
+                tensor.shape.iter().product(),
+            )?;
+            let equalizer_seed = binary_equalizer_seed(config)?;
+            PackedTensor::from_binary_parts(
+                packed,
+                tensor.shape.clone(),
+                quant_params,
+                equalizer_seed,
+            )
+            .map_err(|e| anyhow::anyhow!("failed to rebuild binary bigram tensor: {e}"))
+        }
+        TensorFormat::Float32 => bail!(
+            "packed_tensor_from_obm_tensor requires a packed tensor, got f32 for `{}`",
+            tensor.name
+        ),
+    }
 }
 
 fn serialize_bigram_model(
@@ -288,18 +339,55 @@ fn serialize_bigram_model(
     match normalized_runtime_weight_format(config)?.as_str() {
         WEIGHT_FORMAT_FP32 => {
             let mut stored_config = config.clone();
-            stored_config.metadata.remove(META_BIGRAM_WEIGHT_GRANULARITY);
+            stored_config
+                .metadata
+                .remove(META_BIGRAM_WEIGHT_GRANULARITY);
             stored_config.metadata.remove(META_BIGRAM_WEIGHT_SCALES);
+            stored_config
+                .metadata
+                .remove(META_BIGRAM_WEIGHT_EQUALIZER_SEED);
             Ok(SerializedBigramModel {
                 config: stored_config,
                 tensor: ObmTensor::from_f32(
                     BIGRAM_WEIGHT_TENSOR,
                     weight.shape().to_vec(),
-                    weight
-                        .as_slice()
-                        .ok_or_else(|| anyhow::anyhow!("bigram weight tensor must be contiguous"))?,
+                    weight.as_slice().ok_or_else(|| {
+                        anyhow::anyhow!("bigram weight tensor must be contiguous")
+                    })?,
                 ),
                 quant_metrics: None,
+            })
+        }
+        WEIGHT_FORMAT_BINARY => {
+            let granularity = quant_granularity(config);
+            let equalizer_seed = binary_equalizer_seed(config)?;
+            let packed = PackedTensor::from_binary_ndarray(weight, granularity, equalizer_seed);
+            let runtime_weight = packed.to_ndarray();
+            let quant_metrics = Some(quantization_metrics(weight, &runtime_weight));
+            let mut stored_config = config.clone();
+            stored_config.metadata.insert(
+                META_BIGRAM_WEIGHT_GRANULARITY.into(),
+                granularity_metadata_value(granularity),
+            );
+            stored_config.metadata.insert(
+                META_BIGRAM_WEIGHT_SCALES.into(),
+                serialize_scales(&packed.quant_params().scales),
+            );
+            stored_config.metadata.insert(
+                META_BIGRAM_WEIGHT_EQUALIZER_SEED.into(),
+                equalizer_seed.to_string(),
+            );
+            Ok(SerializedBigramModel {
+                config: stored_config,
+                tensor: ObmTensor::from_binary(
+                    BIGRAM_WEIGHT_TENSOR,
+                    weight.shape().to_vec(),
+                    packed
+                        .binary_data()
+                        .expect("binary tensor should expose binary storage")
+                        .raw_data(),
+                ),
+                quant_metrics,
             })
         }
         WEIGHT_FORMAT_TERNARY => {
@@ -308,6 +396,9 @@ fn serialize_bigram_model(
             let runtime_weight = packed.to_ndarray();
             let quant_metrics = Some(quantization_metrics(weight, &runtime_weight));
             let mut stored_config = config.clone();
+            stored_config
+                .metadata
+                .remove(META_BIGRAM_WEIGHT_EQUALIZER_SEED);
             stored_config.metadata.insert(
                 META_BIGRAM_WEIGHT_GRANULARITY.into(),
                 granularity_metadata_value(granularity),
@@ -321,7 +412,10 @@ fn serialize_bigram_model(
                 tensor: ObmTensor::from_packed(
                     BIGRAM_WEIGHT_TENSOR,
                     weight.shape().to_vec(),
-                    packed.packed_data().raw_data(),
+                    packed
+                        .ternary_data()
+                        .expect("ternary tensor should expose ternary storage")
+                        .raw_data(),
                 ),
                 quant_metrics,
             })
@@ -341,18 +435,27 @@ pub fn load_bigram_model(path: &Path) -> anyhow::Result<LoadedBigramModel> {
         .tensors
         .iter()
         .find(|tensor| tensor.name == BIGRAM_WEIGHT_TENSOR)
-        .with_context(|| format!("missing tensor `{BIGRAM_WEIGHT_TENSOR}` in {}", path.display()))?;
+        .with_context(|| {
+            format!(
+                "missing tensor `{BIGRAM_WEIGHT_TENSOR}` in {}",
+                path.display()
+            )
+        })?;
 
     let (dense_weight, packed_weight) = match tensor.format {
         TensorFormat::Float32 => {
-            let data = tensor
-                .as_f32()
-                .with_context(|| format!("tensor `{BIGRAM_WEIGHT_TENSOR}` is not stored as f32 values"))?;
-            let weight = Array::from_shape_vec(IxDyn(&tensor.shape), data)
-                .map_err(|e| anyhow::anyhow!("invalid `{BIGRAM_WEIGHT_TENSOR}` shape {:?}: {e}", tensor.shape))?;
+            let data = tensor.as_f32().with_context(|| {
+                format!("tensor `{BIGRAM_WEIGHT_TENSOR}` is not stored as f32 values")
+            })?;
+            let weight = Array::from_shape_vec(IxDyn(&tensor.shape), data).map_err(|e| {
+                anyhow::anyhow!(
+                    "invalid `{BIGRAM_WEIGHT_TENSOR}` shape {:?}: {e}",
+                    tensor.shape
+                )
+            })?;
             (weight, None)
         }
-        TensorFormat::BitpackedTernary => {
+        TensorFormat::BitpackedTernary | TensorFormat::BitpackedBinary => {
             let packed = packed_tensor_from_obm_tensor(tensor, &obm.header.config)?;
             (packed.to_ndarray(), Some(packed))
         }
@@ -414,28 +517,263 @@ fn build_step_offsets(
 
 pub fn collect_corpus_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
     if path.is_file() {
-        return fs::read(path)
-            .with_context(|| format!("failed to read corpus file {}", path.display()));
+        return collect_corpus_file_bytes(path);
     }
     if !path.is_dir() {
-        bail!("corpus path is neither a file nor directory: {}", path.display());
+        bail!(
+            "corpus path is neither a file nor directory: {}",
+            path.display()
+        );
     }
 
     let mut files = Vec::new();
     collect_files(path, &mut files)?;
     if files.is_empty() {
-        bail!("corpus directory `{}` does not contain any files", path.display());
+        bail!(
+            "corpus directory `{}` does not contain any files",
+            path.display()
+        );
     }
 
     let mut corpus = Vec::new();
     for file in files {
-        corpus.extend(
-            fs::read(&file)
-                .with_context(|| format!("failed to read corpus file {}", file.display()))?,
-        );
-        corpus.push(b'\n');
+        let file_bytes = collect_corpus_file_bytes(&file)?;
+        if file_bytes.is_empty() {
+            continue;
+        }
+        if !corpus.is_empty() && !corpus.ends_with(b"\n") {
+            corpus.push(b'\n');
+        }
+        corpus.extend(file_bytes);
+        if !corpus.ends_with(b"\n") {
+            corpus.push(b'\n');
+        }
     }
     Ok(corpus)
+}
+
+fn collect_corpus_file_bytes(path: &Path) -> anyhow::Result<Vec<u8>> {
+    match corpus_file_format(path) {
+        CorpusFileFormat::Csv => load_csv_corpus(path),
+        CorpusFileFormat::Json => load_json_corpus(path),
+        CorpusFileFormat::JsonLines => load_json_lines_corpus(path),
+        CorpusFileFormat::RawText => {
+            fs::read(path).with_context(|| format!("failed to read corpus file {}", path.display()))
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CorpusFileFormat {
+    Csv,
+    Json,
+    JsonLines,
+    RawText,
+}
+
+fn corpus_file_format(path: &Path) -> CorpusFileFormat {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("csv") => CorpusFileFormat::Csv,
+        Some("json") => CorpusFileFormat::Json,
+        Some("jsonl") | Some("ndjson") => CorpusFileFormat::JsonLines,
+        _ => CorpusFileFormat::RawText,
+    }
+}
+
+fn read_utf8_corpus_file(path: &Path) -> anyhow::Result<String> {
+    fs::read_to_string(path).with_context(|| {
+        format!(
+            "failed to read corpus file {} as UTF-8 text",
+            path.display()
+        )
+    })
+}
+
+fn load_csv_corpus(path: &Path) -> anyhow::Result<Vec<u8>> {
+    let csv_text = read_utf8_corpus_file(path)?;
+    let rows = parse_csv_rows(&csv_text)
+        .with_context(|| format!("failed to parse CSV corpus {}", path.display()))?;
+    let rendered = render_text_rows(rows);
+    if rendered.is_empty() {
+        bail!(
+            "CSV corpus {} did not contain any non-empty cells",
+            path.display()
+        );
+    }
+    Ok(rendered)
+}
+
+fn load_json_corpus(path: &Path) -> anyhow::Result<Vec<u8>> {
+    let json_text = read_utf8_corpus_file(path)?;
+    let value: Value = serde_json::from_str(&json_text)
+        .with_context(|| format!("failed to parse JSON corpus {}", path.display()))?;
+    let rendered = render_json_value(&value);
+    if rendered.is_empty() {
+        bail!(
+            "JSON corpus {} did not contain any textual or scalar values",
+            path.display()
+        );
+    }
+    Ok(rendered)
+}
+
+fn load_json_lines_corpus(path: &Path) -> anyhow::Result<Vec<u8>> {
+    let jsonl_text = read_utf8_corpus_file(path)?;
+    let mut rows = Vec::new();
+    for (line_no, line) in jsonl_text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let value: Value = serde_json::from_str(trimmed).with_context(|| {
+            format!(
+                "failed to parse JSONL corpus {} at line {}",
+                path.display(),
+                line_no + 1
+            )
+        })?;
+        let rendered = render_json_value(&value);
+        if !rendered.is_empty() {
+            rows.push(String::from_utf8(rendered).expect("rendered JSON text is valid UTF-8"));
+        }
+    }
+
+    let corpus = render_text_rows(rows.into_iter().map(|row| vec![row]).collect());
+    if corpus.is_empty() {
+        bail!(
+            "JSONL corpus {} did not contain any textual or scalar values",
+            path.display()
+        );
+    }
+    Ok(corpus)
+}
+
+fn render_json_value(value: &Value) -> Vec<u8> {
+    let mut fragments = Vec::new();
+    collect_json_fragments(value, &mut fragments);
+    render_text_rows(
+        fragments
+            .into_iter()
+            .map(|fragment| vec![fragment])
+            .collect(),
+    )
+}
+
+fn collect_json_fragments(value: &Value, fragments: &mut Vec<String>) {
+    match value {
+        Value::Null => {}
+        Value::Bool(flag) => fragments.push(flag.to_string()),
+        Value::Number(number) => fragments.push(number.to_string()),
+        Value::String(text) => push_text_fragment(fragments, text),
+        Value::Array(items) => {
+            for item in items {
+                collect_json_fragments(item, fragments);
+            }
+        }
+        Value::Object(map) => {
+            for key in JSON_TEXT_KEYS {
+                if let Some(value) = map.get(*key) {
+                    collect_json_fragments(value, fragments);
+                }
+            }
+
+            let mut remaining = map
+                .keys()
+                .filter(|key| !JSON_TEXT_KEYS.contains(&key.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            remaining.sort();
+            for key in remaining {
+                if let Some(value) = map.get(&key) {
+                    collect_json_fragments(value, fragments);
+                }
+            }
+        }
+    }
+}
+
+fn push_text_fragment(fragments: &mut Vec<String>, text: &str) {
+    let trimmed = text.trim();
+    if !trimmed.is_empty() {
+        fragments.push(trimmed.to_string());
+    }
+}
+
+fn render_text_rows(rows: Vec<Vec<String>>) -> Vec<u8> {
+    let mut corpus = String::new();
+    for row in rows {
+        let cells = row
+            .into_iter()
+            .map(|cell| cell.trim().to_string())
+            .filter(|cell| !cell.is_empty())
+            .collect::<Vec<_>>();
+        if cells.is_empty() {
+            continue;
+        }
+        if !corpus.is_empty() {
+            corpus.push('\n');
+        }
+        corpus.push_str(&cells.join(" "));
+    }
+    corpus.into_bytes()
+}
+
+fn parse_csv_rows(input: &str) -> anyhow::Result<Vec<Vec<String>>> {
+    let mut rows = Vec::new();
+    let mut row = Vec::new();
+    let mut field = String::new();
+    let mut chars = input.chars().peekable();
+    let mut in_quotes = false;
+
+    while let Some(ch) = chars.next() {
+        if in_quotes {
+            match ch {
+                '"' => {
+                    if chars.peek() == Some(&'"') {
+                        field.push('"');
+                        chars.next();
+                    } else {
+                        in_quotes = false;
+                    }
+                }
+                _ => field.push(ch),
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_quotes = true,
+            ',' => row.push(std::mem::take(&mut field)),
+            '\n' => {
+                row.push(std::mem::take(&mut field));
+                rows.push(std::mem::take(&mut row));
+            }
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                row.push(std::mem::take(&mut field));
+                rows.push(std::mem::take(&mut row));
+            }
+            _ => field.push(ch),
+        }
+    }
+
+    if in_quotes {
+        bail!("unterminated quoted CSV field");
+    }
+
+    if !field.is_empty() || !row.is_empty() {
+        row.push(field);
+        rows.push(row);
+    }
+
+    Ok(rows)
 }
 
 fn collect_files(path: &Path, files: &mut Vec<PathBuf>) -> anyhow::Result<()> {
@@ -649,10 +987,7 @@ pub struct BigramTrainArgs<'a> {
     pub distill_temperature: f32,
 }
 
-pub fn train_bigram(
-    config: &ModelConfig,
-    args: BigramTrainArgs<'_>,
-) -> anyhow::Result<PathBuf> {
+pub fn train_bigram(config: &ModelConfig, args: BigramTrainArgs<'_>) -> anyhow::Result<PathBuf> {
     require_bigram_config(config)?;
     let train_weight_format = normalize_weight_format(args.train_weight_format)?;
     let save_weight_format =
@@ -686,10 +1021,7 @@ pub fn train_bigram(
         None
     };
 
-    let eval_corpus = args
-        .eval_path
-        .map(collect_corpus_bytes)
-        .transpose()?;
+    let eval_corpus = args.eval_path.map(collect_corpus_bytes).transpose()?;
 
     let mut weight = if let Some(resume_path) = args.resume_path {
         let resume = load_bigram_model(resume_path)?;
@@ -703,7 +1035,7 @@ pub fn train_bigram(
     let mut optimizer = AdamW::new(args.lr, 0.9, 0.999, 1e-8, args.weight_decay);
     let mut trainer = Trainer::new(TrainConfig {
         grad_clip_norm: args.max_grad_norm,
-        use_qat: train_weight_format == WEIGHT_FORMAT_TERNARY,
+        use_qat: train_weight_format != WEIGHT_FORMAT_FP32,
         ..TrainConfig::default()
     });
 
@@ -761,10 +1093,10 @@ pub fn train_bigram(
         let result = trainer
             .train_step(&mut [&mut param], &mut optimizer, |tape, vars| {
                 let input_var = Variable::new(batch.input.clone(), false, tape);
-                let weight_var = if train_weight_format == WEIGHT_FORMAT_TERNARY {
-                    ops::quantize_unit_ste(&vars[0], 0.5)
-                } else {
-                    vars[0].clone()
+                let weight_var = match train_weight_format.as_str() {
+                    WEIGHT_FORMAT_TERNARY => ops::quantize_unit_ste(&vars[0], 0.5),
+                    WEIGHT_FORMAT_BINARY => ops::binarize_sign_ste(&vars[0]),
+                    _ => vars[0].clone(),
                 };
                 let logits = ops::matmul(&input_var, &weight_var);
                 let hard_loss = ops::cross_entropy_loss(&logits, &batch.targets);
@@ -780,14 +1112,10 @@ pub fn train_bigram(
                     } else if distill_alpha >= 1.0 {
                         Ok(distill_loss)
                     } else {
-                        let hard_scale = Variable::detached(Array::from_elem(
-                            IxDyn(&[1]),
-                            1.0 - distill_alpha,
-                        ));
-                        let distill_scale = Variable::detached(Array::from_elem(
-                            IxDyn(&[1]),
-                            distill_alpha,
-                        ));
+                        let hard_scale =
+                            Variable::detached(Array::from_elem(IxDyn(&[1]), 1.0 - distill_alpha));
+                        let distill_scale =
+                            Variable::detached(Array::from_elem(IxDyn(&[1]), distill_alpha));
                         Ok(ops::add(
                             &ops::mul(&hard_loss, &hard_scale),
                             &ops::mul(&distill_loss, &distill_scale),
@@ -825,7 +1153,8 @@ pub fn train_bigram(
             let checkpoint_path = args
                 .output_dir
                 .join(format!("checkpoint-step-{:06}.obm", step + 1));
-            let checkpoint_metrics = save_bigram_obm(&checkpoint_path, &checkpoint_config, &param.data)?;
+            let checkpoint_metrics =
+                save_bigram_obm(&checkpoint_path, &checkpoint_config, &param.data)?;
             if let Some(metrics) = checkpoint_metrics {
                 log::info!(
                     "checkpoint {} quantization mse={:.6} mean_abs_error={:.6} exact_match_fraction={:.4}",
@@ -930,7 +1259,8 @@ pub fn generate_bigram_loaded(
     for _ in 0..max_tokens {
         let token = *bytes
             .last()
-            .ok_or_else(|| anyhow::anyhow!("prompt resolution failed"))? as usize;
+            .ok_or_else(|| anyhow::anyhow!("prompt resolution failed"))?
+            as usize;
 
         let logits = if let Some(packed) = &model.packed_weight {
             let mut one_hot = Array::zeros(IxDyn(&[1, model.config.vocab_size]));
@@ -959,11 +1289,7 @@ pub fn generate_bigram_loaded(
         println!();
     }
 
-    Ok(format!(
-        "{}{}",
-        prompt,
-        String::from_utf8_lossy(&generated)
-    ))
+    Ok(format!("{}{}", prompt, String::from_utf8_lossy(&generated)))
 }
 
 pub fn quantize_bigram_model(
@@ -990,4 +1316,166 @@ pub fn quantize_bigram_model(
     }
 
     save_bigram_obm(output_path, &config, &model.dense_weight)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempPath {
+        root: PathBuf,
+    }
+
+    impl TempPath {
+        fn new() -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time before unix epoch")
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "onebitllm-bigram-tests-{}-{}",
+                std::process::id(),
+                unique
+            ));
+            fs::create_dir_all(&root).expect("failed to create temp test dir");
+            Self { root }
+        }
+
+        fn path(&self, relative: &str) -> PathBuf {
+            self.root.join(relative)
+        }
+
+        fn write(&self, relative: &str, contents: &str) -> PathBuf {
+            let path = self.path(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("failed to create temp parent dir");
+            }
+            fs::write(&path, contents).expect("failed to write temp file");
+            path
+        }
+    }
+
+    impl Drop for TempPath {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn collect_corpus_bytes_keeps_txt_as_raw_bytes() {
+        let temp = TempPath::new();
+        let path = temp.write("train.txt", "hello, world\nline two");
+
+        let corpus = collect_corpus_bytes(&path).expect("failed to load txt corpus");
+
+        assert_eq!(corpus, b"hello, world\nline two");
+    }
+
+    #[test]
+    fn collect_corpus_bytes_extracts_text_from_json() {
+        let temp = TempPath::new();
+        let path = temp.write(
+            "train.json",
+            r#"[
+  {"prompt":"hello","completion":"world"},
+  {"metadata":{"title":"sample"},"messages":[{"role":"user","content":"ask"},{"role":"assistant","content":"answer"}]}
+]"#,
+        );
+
+        let corpus = collect_corpus_bytes(&path).expect("failed to load json corpus");
+
+        assert_eq!(
+            String::from_utf8(corpus).expect("json corpus should be utf-8"),
+            "hello\nworld\nask\nuser\nanswer\nassistant\nsample"
+        );
+    }
+
+    #[test]
+    fn collect_corpus_bytes_extracts_text_from_jsonl() {
+        let temp = TempPath::new();
+        let path = temp.write(
+            "train.jsonl",
+            "{\"text\":\"alpha\"}\n{\"prompt\":\"beta\",\"completion\":\"gamma\"}\n",
+        );
+
+        let corpus = collect_corpus_bytes(&path).expect("failed to load jsonl corpus");
+
+        assert_eq!(
+            String::from_utf8(corpus).expect("jsonl corpus should be utf-8"),
+            "alpha\nbeta\ngamma"
+        );
+    }
+
+    #[test]
+    fn collect_corpus_bytes_flattens_csv_rows() {
+        let temp = TempPath::new();
+        let path = temp.write(
+            "train.csv",
+            "prompt,response\n\"hello, there\",\"general \"\"kenobi\"\"\"\nfoo,bar\n",
+        );
+
+        let corpus = collect_corpus_bytes(&path).expect("failed to load csv corpus");
+
+        assert_eq!(
+            String::from_utf8(corpus).expect("csv corpus should be utf-8"),
+            "prompt response\nhello, there general \"kenobi\"\nfoo bar"
+        );
+    }
+
+    #[test]
+    fn collect_corpus_bytes_handles_directories_with_mixed_formats() {
+        let temp = TempPath::new();
+        temp.write("a.txt", "plain text");
+        temp.write("nested/b.json", r#"{"text":"json text"}"#);
+        temp.write("nested/c.csv", "left,right\ncsv,row\n");
+
+        let corpus =
+            collect_corpus_bytes(&temp.root).expect("failed to load mixed-format corpus dir");
+
+        assert_eq!(
+            String::from_utf8(corpus).expect("mixed corpus should be utf-8"),
+            "plain text\njson text\nleft right\ncsv row\n"
+        );
+    }
+
+    #[test]
+    fn save_and_load_binary_bigram_model_roundtrips_runtime_metadata() {
+        let temp = TempPath::new();
+        let model_path = temp.path("model.obm");
+        let config = ModelConfig {
+            architecture: BIGRAM_ARCHITECTURE.into(),
+            vocab_size: 256,
+            weight_format: WEIGHT_FORMAT_BINARY.into(),
+            training_weight_format: WEIGHT_FORMAT_BINARY.into(),
+            ..ModelConfig::default()
+        };
+        let weight = Array::from_shape_vec(
+            IxDyn(&[256, 256]),
+            (0..(256 * 256))
+                .map(|index| if index % 2 == 0 { 1.0 } else { -1.0 })
+                .collect(),
+        )
+        .unwrap();
+
+        let metrics = save_bigram_obm(&model_path, &config, &weight).unwrap();
+        assert!(metrics.is_some());
+
+        let loaded = load_bigram_model(&model_path).unwrap();
+        assert!(loaded.packed_weight.is_some());
+        assert_eq!(
+            loaded
+                .config
+                .metadata
+                .get(META_BIGRAM_WEIGHT_EQUALIZER_SEED)
+                .unwrap(),
+            &DEFAULT_BIGRAM_EQUALIZER_SEED.to_string()
+        );
+        assert!(loaded
+            .packed_weight
+            .as_ref()
+            .unwrap()
+            .binary_data()
+            .is_some());
+    }
 }

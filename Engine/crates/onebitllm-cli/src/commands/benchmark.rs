@@ -2,10 +2,10 @@ use std::fs;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use clap::Args;
 
-use onebitllm_core::backend::{BackendKind, create_backend};
+use onebitllm_core::backend::{create_backend, BackendKind};
 use onebitllm_core::infer::SamplingConfig;
 
 use super::bigram;
@@ -152,8 +152,14 @@ pub fn run(args: BenchmarkArgs) -> anyhow::Result<()> {
         bail!("benchmark did not execute any measured requests");
     }
 
-    let latencies = metrics.iter().map(|metric| metric.latency).collect::<Vec<_>>();
-    let total_tokens = metrics.iter().map(|metric| metric.generated_tokens).sum::<usize>();
+    let latencies = metrics
+        .iter()
+        .map(|metric| metric.latency)
+        .collect::<Vec<_>>();
+    let total_tokens = metrics
+        .iter()
+        .map(|metric| metric.generated_tokens)
+        .sum::<usize>();
     let request_count = metrics.len();
 
     println!("load_ms={:.2}", duration_ms(load_latency));
@@ -161,14 +167,24 @@ pub fn run(args: BenchmarkArgs) -> anyhow::Result<()> {
     println!("concurrency={}", args.concurrency);
     println!("generated_tokens={total_tokens}");
     println!("wall_ms={:.2}", duration_ms(wall_time));
-    println!("throughput_req_per_s={:.3}", request_count as f64 / wall_time.as_secs_f64());
-    println!("throughput_tok_per_s={:.3}", total_tokens as f64 / wall_time.as_secs_f64());
+    println!(
+        "throughput_req_per_s={:.3}",
+        request_count as f64 / wall_time.as_secs_f64()
+    );
+    println!(
+        "throughput_tok_per_s={:.3}",
+        total_tokens as f64 / wall_time.as_secs_f64()
+    );
     println!("latency_p50_ms={:.2}", percentile_ms(&latencies, 0.50));
     println!("latency_p95_ms={:.2}", percentile_ms(&latencies, 0.95));
     println!("latency_p99_ms={:.2}", percentile_ms(&latencies, 0.99));
     println!(
         "latency_avg_ms={:.2}",
-        latencies.iter().map(|value| duration_ms(*value)).sum::<f64>() / request_count as f64
+        latencies
+            .iter()
+            .map(|value| duration_ms(*value))
+            .sum::<f64>()
+            / request_count as f64
     );
 
     Ok(())
@@ -189,11 +205,9 @@ fn load_prompts(args: &BenchmarkArgs) -> anyhow::Result<Vec<String>> {
         return Ok(prompts);
     }
 
-    Ok(vec![
-        args.prompt
-            .clone()
-            .unwrap_or_else(|| "The future of 1-bit models is ".into()),
-    ])
+    Ok(vec![args.prompt.clone().unwrap_or_else(|| {
+        "The future of 1-bit models is ".into()
+    })])
 }
 
 fn run_benchmark_worker(
@@ -240,8 +254,16 @@ fn sampling_config(args: &BenchmarkArgs, seed: Option<u64>) -> anyhow::Result<Sa
 
     Ok(SamplingConfig {
         temperature: args.temperature,
-        top_k: if args.top_k > 0 { Some(args.top_k) } else { None },
-        top_p: if args.top_p < 1.0 { Some(args.top_p) } else { None },
+        top_k: if args.top_k > 0 {
+            Some(args.top_k)
+        } else {
+            None
+        },
+        top_p: if args.top_p < 1.0 {
+            Some(args.top_p)
+        } else {
+            None
+        },
         repetition_penalty: if args.repetition_penalty > 1.0 {
             Some(args.repetition_penalty)
         } else {
@@ -260,7 +282,10 @@ fn duration_ms(duration: Duration) -> f64 {
 }
 
 fn percentile_ms(values: &[Duration], percentile: f64) -> f64 {
-    let mut sorted = values.iter().map(|value| duration_ms(*value)).collect::<Vec<_>>();
+    let mut sorted = values
+        .iter()
+        .map(|value| duration_ms(*value))
+        .collect::<Vec<_>>();
     sorted.sort_by(|left, right| left.total_cmp(right));
     let index = ((sorted.len().saturating_sub(1)) as f64 * percentile).round() as usize;
     sorted[index]

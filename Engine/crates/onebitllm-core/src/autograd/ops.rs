@@ -3,12 +3,12 @@
 //! Each operation computes the forward result, records a backward closure
 //! on the tape, and returns a new [`Variable`] with the output data.
 
-use std::sync::{Arc, Mutex};
-use ndarray::{Array, Axis, IxDyn, Ix2};
 use super::tape::Tape;
 use super::variable::Variable;
+use crate::quant::ternary::{unit_quantize, TernaryWeight};
 use crate::quant::{QuantConfig, QuantParams};
-use crate::quant::ternary::{TernaryWeight, unit_quantize};
+use ndarray::{Array, Axis, Ix2, IxDyn};
+use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------------------
 // Helper: get tape from variable, or return detached result
@@ -30,8 +30,16 @@ fn shared_tape(a: &Variable, b: &Variable) -> Option<Arc<Mutex<Tape>>> {
 /// - grad_a = grad_output @ b^T
 /// - grad_b = a^T @ grad_output
 pub fn matmul(a: &Variable, b: &Variable) -> Variable {
-    let a_2d = a.data.view().into_dimensionality::<Ix2>().expect("matmul: a must be 2-D");
-    let b_2d = b.data.view().into_dimensionality::<Ix2>().expect("matmul: b must be 2-D");
+    let a_2d = a
+        .data
+        .view()
+        .into_dimensionality::<Ix2>()
+        .expect("matmul: a must be 2-D");
+    let b_2d = b
+        .data
+        .view()
+        .into_dimensionality::<Ix2>()
+        .expect("matmul: b must be 2-D");
     let out = a_2d.dot(&b_2d).into_dyn();
 
     if let Some(tape_ref) = shared_tape(a, b) {
@@ -43,11 +51,17 @@ pub fn matmul(a: &Variable, b: &Variable) -> Variable {
         let mut tape = tape_ref.lock().unwrap();
         let out_id = tape.alloc_id();
         tape.record(out_id, vec![a_id, b_id], move |grad| {
-            let grad_2d = grad.view().into_dimensionality::<Ix2>()
+            let grad_2d = grad
+                .view()
+                .into_dimensionality::<Ix2>()
                 .expect("matmul backward: grad must be 2-D");
-            let a_2d = a_data.view().into_dimensionality::<Ix2>()
+            let a_2d = a_data
+                .view()
+                .into_dimensionality::<Ix2>()
                 .expect("matmul backward: a must be 2-D");
-            let b_2d = b_data.view().into_dimensionality::<Ix2>()
+            let b_2d = b_data
+                .view()
+                .into_dimensionality::<Ix2>()
                 .expect("matmul backward: b must be 2-D");
 
             // grad_a = grad @ b^T, shape (M, K)
@@ -211,9 +225,11 @@ pub fn softmax(x: &Variable, axis: usize) -> Variable {
 }
 
 fn softmax_forward(data: &Array<f32, IxDyn>, axis: usize) -> Array<f32, IxDyn> {
-    let max = data.map_axis(Axis(axis), |lane| {
-        lane.fold(f32::NEG_INFINITY, |a, &b| a.max(b))
-    }).insert_axis(Axis(axis));
+    let max = data
+        .map_axis(Axis(axis), |lane| {
+            lane.fold(f32::NEG_INFINITY, |a, &b| a.max(b))
+        })
+        .insert_axis(Axis(axis));
     let shifted = data - &max;
     let exp = shifted.mapv(f32::exp);
     let sum = exp.sum_axis(Axis(axis)).insert_axis(Axis(axis));
@@ -507,6 +523,39 @@ pub fn quantize_unit_ste(w: &Variable, threshold: f32) -> Variable {
     }
 }
 
+/// Straight-Through Estimator quantization to true binary {-1, +1}.
+///
+/// Forward: quantize weights to exact binary signs using zero as the split
+/// point. Backward: clipped identity gradient.
+pub fn binarize_sign_ste(w: &Variable) -> Variable {
+    let shape = w.data.shape().to_vec();
+    let out = w.data.mapv(|value| if value >= 0.0 { 1.0 } else { -1.0 });
+
+    if let Some(tape_ref) = &w.tape {
+        let w_id = w.id;
+
+        let mut tape = tape_ref.lock().unwrap();
+        let out_id = tape.alloc_id();
+        tape.record(out_id, vec![w_id], move |grad| {
+            vec![grad.mapv(|g| g.clamp(-1.0, 1.0))]
+        });
+
+        Variable {
+            id: out_id,
+            data: out
+                .into_shape_with_order(IxDyn(&shape))
+                .expect("binarize_sign_ste: shape mismatch in output"),
+            requires_grad: w.requires_grad,
+            tape: Some(Arc::clone(tape_ref)),
+        }
+    } else {
+        Variable::detached(
+            out.into_shape_with_order(IxDyn(&shape))
+                .expect("binarize_sign_ste: shape mismatch in output"),
+        )
+    }
+}
+
 // ---------------------------------------------------------------------------
 // RMS Norm
 // ---------------------------------------------------------------------------
@@ -526,7 +575,10 @@ pub fn rms_norm(x: &Variable, weight: &Variable, eps: f32) -> Variable {
     let ndim = x_data.ndim();
     let last_axis = ndim - 1;
     let x_sq = x_data.mapv(|v| v * v);
-    let mean_sq = x_sq.mean_axis(Axis(last_axis)).unwrap().insert_axis(Axis(last_axis));
+    let mean_sq = x_sq
+        .mean_axis(Axis(last_axis))
+        .unwrap()
+        .insert_axis(Axis(last_axis));
     let rms = mean_sq.mapv(|v| (v + eps).sqrt());
     let x_norm = x_data / &rms;
     let out = &x_norm * w_data;
@@ -587,7 +639,9 @@ pub fn rms_norm(x: &Variable, weight: &Variable, eps: f32) -> Variable {
 ///
 /// Backward: reshapes the gradient back to the original shape.
 pub fn reshape(x: &Variable, new_shape: &[usize]) -> Variable {
-    let out = x.data.clone()
+    let out = x
+        .data
+        .clone()
         .into_shape_with_order(IxDyn(new_shape))
         .expect("reshape: incompatible shape");
 
@@ -598,7 +652,8 @@ pub fn reshape(x: &Variable, new_shape: &[usize]) -> Variable {
         let mut tape = tape_ref.lock().unwrap();
         let out_id = tape.alloc_id();
         tape.record(out_id, vec![x_id], move |grad| {
-            let reshaped = grad.clone()
+            let reshaped = grad
+                .clone()
                 .into_shape_with_order(IxDyn(&old_shape))
                 .expect("reshape backward: incompatible shape");
             vec![reshaped]
@@ -635,7 +690,14 @@ fn reduce_to_shape(grad: &Array<f32, IxDyn>, target_shape: &[usize]) -> Array<f3
     }
 
     // Sum along axes where target_shape has size 1
-    for (i, (&gs, &ts)) in result.shape().to_vec().iter().zip(target_shape.iter()).enumerate().rev() {
+    for (i, (&gs, &ts)) in result
+        .shape()
+        .to_vec()
+        .iter()
+        .zip(target_shape.iter())
+        .enumerate()
+        .rev()
+    {
         if ts == 1 && gs != 1 {
             result = result.sum_axis(Axis(i)).insert_axis(Axis(i));
         }
@@ -870,8 +932,7 @@ mod tests {
             true,
             &tape,
         );
-        let targets =
-            Array::from_shape_vec(IxDyn(&[1, 3]), vec![0.9, 0.1, 0.0]).unwrap();
+        let targets = Array::from_shape_vec(IxDyn(&[1, 3]), vec![0.9, 0.1, 0.0]).unwrap();
 
         let loss = soft_target_cross_entropy_loss(&logits, &targets, 1.0);
         let grads = loss.backward().unwrap();
@@ -932,13 +993,17 @@ mod tests {
 
         // All gradients should be clipped to [-1, 1]
         for g in grad_w.iter() {
-            assert!(*g >= -1.0 && *g <= 1.0,
-                "STE gradient {g} out of [-1, 1] range");
+            assert!(
+                *g >= -1.0 && *g <= 1.0,
+                "STE gradient {g} out of [-1, 1] range"
+            );
         }
         // Since upstream grad is all 1s and we clip, grad should be 1.0
         for g in grad_w.iter() {
-            assert!((g - 1.0).abs() < 1e-6,
-                "STE gradient should be 1.0, got {g}");
+            assert!(
+                (g - 1.0).abs() < 1e-6,
+                "STE gradient should be 1.0, got {g}"
+            );
         }
     }
 
@@ -951,11 +1016,7 @@ mod tests {
         let q = quantize_ste(&w, &config);
 
         // Manually scale output to make gradient large: loss = 10 * q
-        let scale = Variable::new(
-            Array::from_elem(IxDyn(&[1]), 10.0f32),
-            false,
-            &tape,
-        );
+        let scale = Variable::new(Array::from_elem(IxDyn(&[1]), 10.0f32), false, &tape);
         let scaled = mul(&q, &scale);
         let loss = sum(&scaled);
 
@@ -964,8 +1025,7 @@ mod tests {
 
         // Upstream grad to STE is 10.0, should be clipped to 1.0
         for g in grad_w.iter() {
-            assert!((g - 1.0).abs() < 1e-6,
-                "Expected clipped grad 1.0, got {g}");
+            assert!((g - 1.0).abs() < 1e-6, "Expected clipped grad 1.0, got {g}");
         }
     }
 
@@ -977,24 +1037,29 @@ mod tests {
         assert_eq!(q.data.as_slice().unwrap(), &[1.0, -1.0, 0.0, 0.0]);
     }
 
+    #[test]
+    fn test_binarize_sign_ste_forward_outputs_exact_binary() {
+        let tape = Tape::new();
+        let w = var1d(&tape, &[0.8, -0.8, 0.0, -0.01]);
+        let q = binarize_sign_ste(&w);
+        assert_eq!(q.data.as_slice().unwrap(), &[1.0, -1.0, 1.0, -1.0]);
+    }
+
     // --- rms_norm test ---
 
     #[test]
     fn test_rms_norm_forward() {
         let tape = Tape::new();
         let x = Variable::new(
-            Array::from_shape_vec(IxDyn(&[2, 4]), vec![
-                1.0, 2.0, 3.0, 4.0,
-                -1.0, -2.0, -3.0, -4.0,
-            ]).unwrap(),
+            Array::from_shape_vec(
+                IxDyn(&[2, 4]),
+                vec![1.0, 2.0, 3.0, 4.0, -1.0, -2.0, -3.0, -4.0],
+            )
+            .unwrap(),
             true,
             &tape,
         );
-        let w = Variable::new(
-            Array::from_elem(IxDyn(&[4]), 1.0f32),
-            true,
-            &tape,
-        );
+        let w = Variable::new(Array::from_elem(IxDyn(&[4]), 1.0f32), true, &tape);
         let out = rms_norm(&x, &w, 1e-6);
         assert_eq!(out.data.shape(), &[2, 4]);
 
@@ -1012,11 +1077,7 @@ mod tests {
             true,
             &tape,
         );
-        let w = Variable::new(
-            Array::from_elem(IxDyn(&[3]), 1.0f32),
-            true,
-            &tape,
-        );
+        let w = Variable::new(Array::from_elem(IxDyn(&[3]), 1.0f32), true, &tape);
         let out = rms_norm(&x, &w, 1e-6);
         let loss = sum(&out);
         let grads = loss.backward().unwrap();

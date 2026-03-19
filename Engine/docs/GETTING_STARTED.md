@@ -42,16 +42,18 @@ onebitllm 0.1.0
 
 ## Step 3: Create Sample Data
 
-Create a simple training dataset:
+Create a simple training dataset. The current bigram trainer accepts plain text
+files directly, and it can also flatten `.csv`, `.json`, `.jsonl`, and
+`.ndjson` inputs into a byte-level corpus:
 
 ```bash
 mkdir -p data
-cat > data/train.jsonl <<EOF
-{"text": "The quick brown fox jumps over the lazy dog."}
-{"text": "Machine learning is a subset of artificial intelligence."}
-{"text": "Deep learning uses neural networks with multiple layers."}
-{"text": "Transformers have revolutionized natural language processing."}
-{"text": "Quantization reduces model size for efficient inference."}
+cat > data/train.txt <<EOF
+The quick brown fox jumps over the lazy dog.
+Machine learning is a subset of artificial intelligence.
+Deep learning uses neural networks with multiple layers.
+Transformers have revolutionized natural language processing.
+Quantization reduces model size for efficient inference.
 EOF
 ```
 
@@ -62,36 +64,37 @@ Create a small JSON model configuration for testing:
 ```bash
 cat > config.json <<EOF
 {
-  "architecture": "bitnet-b1.58",
-  "hidden_size": 128,
-  "num_layers": 2,
-  "num_attention_heads": 2,
-  "num_kv_heads": 2,
+  "architecture": "bigram",
+  "hidden_size": 256,
+  "num_layers": 1,
+  "num_attention_heads": 1,
+  "num_kv_heads": 1,
   "intermediate_size": 256,
-  "vocab_size": 1000,
+  "vocab_size": 256,
   "max_seq_len": 128,
   "activation": "gelu"
 }
 EOF
 ```
 
-## Step 5: Validate the Current Engine Surface
+## Step 5: Run a Small Training Job
 
 ### Option A: Using the CLI
 
-Validate a small training request:
+Run a small training request:
 
 ```bash
 cargo run --release --bin onebitllm -- train \
   --config config.json \
-  --data data/train.jsonl \
+  --data data/train.txt \
   --output out \
   --epochs 2 \
   --batch-size 2
 ```
 
-The current CLI validates the config and paths, then returns an explicit
-unimplemented error. It does not train or write checkpoints yet.
+The current CLI trains and writes checkpoints for the byte-level bigram path.
+`architecture` must be `bigram` and `vocab_size` must be `256` for real
+training execution.
 
 ### Option B: Using Rust Library
 

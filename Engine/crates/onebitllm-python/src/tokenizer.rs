@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 
-use onebitllm_core::tokenizer::{Tokenizer, Encoding};
 use onebitllm_core::tokenizer::bpe::SimpleBpe;
+use onebitllm_core::tokenizer::{Encoding, Tokenizer};
 
 /// A Python-accessible tokenizer.
 ///
@@ -20,7 +20,10 @@ impl PyTokenizer {
     ///     vocab: dict mapping token strings to integer IDs
     ///     merges: list of (str, str) merge pairs in priority order
     #[new]
-    fn new(vocab: std::collections::HashMap<String, u32>, merges: Vec<(String, String)>) -> PyResult<Self> {
+    fn new(
+        vocab: std::collections::HashMap<String, u32>,
+        merges: Vec<(String, String)>,
+    ) -> PyResult<Self> {
         let bpe = SimpleBpe::from_data(vocab, merges);
         Ok(Self {
             inner: Box::new(bpe),
@@ -31,14 +34,17 @@ impl PyTokenizer {
     ///
     /// Returns a dict with 'ids', 'tokens', and 'attention_mask'.
     fn encode(&self, text: &str) -> PyResult<PyEncoding> {
-        let encoding = self.inner.encode(text)
+        let encoding = self
+            .inner
+            .encode(text)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         Ok(PyEncoding::from_core(encoding))
     }
 
     /// Decode token IDs back to text.
     fn decode(&self, ids: Vec<u32>) -> PyResult<String> {
-        self.inner.decode(&ids)
+        self.inner
+            .decode(&ids)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 

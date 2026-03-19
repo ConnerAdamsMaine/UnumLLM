@@ -2,7 +2,7 @@ use anyhow::bail;
 use clap::ArgAction;
 use clap::Args;
 
-use onebitllm_core::backend::{BackendKind, create_backend};
+use onebitllm_core::backend::{create_backend, BackendKind};
 
 use super::bigram;
 
@@ -65,8 +65,16 @@ pub fn run(args: GenerateArgs) -> anyhow::Result<()> {
     // Build sampling config
     let _sampling = onebitllm_core::infer::SamplingConfig {
         temperature: args.temperature,
-        top_k: if args.top_k > 0 { Some(args.top_k) } else { None },
-        top_p: if args.top_p < 1.0 { Some(args.top_p) } else { None },
+        top_k: if args.top_k > 0 {
+            Some(args.top_k)
+        } else {
+            None
+        },
+        top_p: if args.top_p < 1.0 {
+            Some(args.top_p)
+        } else {
+            None
+        },
         repetition_penalty: if args.repetition_penalty > 1.0 {
             Some(args.repetition_penalty)
         } else {
@@ -85,10 +93,9 @@ pub fn run(args: GenerateArgs) -> anyhow::Result<()> {
     if let Ok(model) = bigram::load_bigram_model(model_path) {
         let config = &model.config;
         if bigram::is_bigram_architecture(&config.architecture) {
-            let backend_kind = BackendKind::parse(&args.device)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            let backend = create_backend(backend_kind)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let backend_kind =
+                BackendKind::parse(&args.device).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let backend = create_backend(backend_kind).map_err(|e| anyhow::anyhow!("{e}"))?;
             let output = bigram::generate_bigram_loaded(
                 &model,
                 &args.prompt,

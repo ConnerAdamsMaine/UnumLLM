@@ -6,12 +6,12 @@
 use std::io::Write;
 
 use ndarray::{Array, IxDyn};
-use safetensors::tensor::{Dtype, SafeTensors, TensorView};
 use safetensors::serialize;
+use safetensors::tensor::{Dtype, SafeTensors, TensorView};
 
-use crate::Result;
 use crate::error::OneBitError;
 use crate::nn::Parameter;
+use crate::Result;
 
 /// Save parameters to SafeTensors format.
 ///
@@ -30,19 +30,21 @@ pub fn save_safetensors<W: Write>(params: &[&Parameter], mut w: W) -> Result<()>
     let mut tensors: Vec<(String, TensorView<'_>)> = Vec::with_capacity(params.len());
     for (i, param) in params.iter().enumerate() {
         let shape: Vec<usize> = param.data.shape().to_vec();
-        let view = TensorView::new(Dtype::F32, shape, &data_buffers[i])
-            .map_err(|e| OneBitError::Io(std::io::Error::new(
+        let view = TensorView::new(Dtype::F32, shape, &data_buffers[i]).map_err(|e| {
+            OneBitError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Failed to create tensor view for '{}': {e}", param.name),
-            )))?;
+            ))
+        })?;
         tensors.push((param.name.clone(), view));
     }
 
-    let serialized = serialize(tensors, &None)
-        .map_err(|e| OneBitError::Io(std::io::Error::new(
+    let serialized = serialize(tensors, &None).map_err(|e| {
+        OneBitError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("Failed to serialize safetensors: {e}"),
-        )))?;
+        ))
+    })?;
 
     w.write_all(&serialized)?;
     Ok(())
@@ -52,11 +54,12 @@ pub fn save_safetensors<W: Write>(params: &[&Parameter], mut w: W) -> Result<()>
 ///
 /// Returns named tensors as (name, shape, f32 data) tuples.
 pub fn load_safetensors(data: &[u8]) -> Result<Vec<(String, Vec<usize>, Vec<f32>)>> {
-    let tensors = SafeTensors::deserialize(data)
-        .map_err(|e| OneBitError::Io(std::io::Error::new(
+    let tensors = SafeTensors::deserialize(data).map_err(|e| {
+        OneBitError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("Failed to deserialize safetensors: {e}"),
-        )))?;
+        ))
+    })?;
 
     let mut result = Vec::new();
 
@@ -64,7 +67,8 @@ pub fn load_safetensors(data: &[u8]) -> Result<Vec<(String, Vec<usize>, Vec<f32>
         if tensor.dtype() != Dtype::F32 {
             return Err(OneBitError::Config(format!(
                 "Unsupported dtype {:?} for tensor '{}' (expected F32)",
-                tensor.dtype(), name
+                tensor.dtype(),
+                name
             )));
         }
 
@@ -73,7 +77,8 @@ pub fn load_safetensors(data: &[u8]) -> Result<Vec<(String, Vec<usize>, Vec<f32>
         if bytes.len() % 4 != 0 {
             return Err(OneBitError::Config(format!(
                 "Tensor '{}' data length {} not a multiple of 4",
-                name, bytes.len()
+                name,
+                bytes.len()
             )));
         }
 
@@ -89,18 +94,14 @@ pub fn load_safetensors(data: &[u8]) -> Result<Vec<(String, Vec<usize>, Vec<f32>
 }
 
 /// Restore SafeTensors data into existing parameters (matched by name).
-pub fn restore_safetensors_into(
-    data: &[u8],
-    params: &mut [&mut Parameter],
-) -> Result<()> {
+pub fn restore_safetensors_into(data: &[u8], params: &mut [&mut Parameter]) -> Result<()> {
     let loaded = load_safetensors(data)?;
 
     for (name, shape, f32_data) in &loaded {
         if let Some(param) = params.iter_mut().find(|p| &p.name == name) {
-            let arr = Array::from_shape_vec(IxDyn(shape), f32_data.clone())
-                .map_err(|e| OneBitError::Config(format!(
-                    "Failed to reshape tensor '{}': {e}", name
-                )))?;
+            let arr = Array::from_shape_vec(IxDyn(shape), f32_data.clone()).map_err(|e| {
+                OneBitError::Config(format!("Failed to reshape tensor '{}': {e}", name))
+            })?;
             param.data = arr;
         }
     }
@@ -149,10 +150,7 @@ mod tests {
         let mut buf = Vec::new();
         save_safetensors(&[&p1], &mut buf).unwrap();
 
-        let mut p_new = Parameter::new(
-            "w",
-            Array::from_elem(IxDyn(&[2]), 0.0f32),
-        );
+        let mut p_new = Parameter::new("w", Array::from_elem(IxDyn(&[2]), 0.0f32));
 
         restore_safetensors_into(&buf, &mut [&mut p_new]).unwrap();
         assert_eq!(p_new.data.as_slice().unwrap(), &[10.0, 20.0]);

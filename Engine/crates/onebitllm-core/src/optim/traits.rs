@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use ndarray::{Array, IxDyn};
-use crate::nn::Parameter;
 use crate::autograd::VarId;
+use crate::nn::Parameter;
+use ndarray::{Array, IxDyn};
+use std::collections::HashMap;
 
 /// Trait for parameter optimizers (AdamW, SGD, etc.).
 ///

@@ -11,7 +11,7 @@ from typing import Any
 
 SUPPORTED_ACTIVATIONS = ("gelu", "mish", "relu", "silu", "swiglu")
 SUPPORTED_POSITIONAL_ENCODINGS = ("alibi", "learned", "rope")
-SUPPORTED_WEIGHT_FORMATS = ("fp32", "ternary")
+SUPPORTED_WEIGHT_FORMATS = ("fp32", "binary", "ternary")
 
 
 @dataclass(slots=True)
@@ -32,8 +32,8 @@ class RustModelConfig:
     rope_theta: float = 10000.0
     use_bias: bool = False
     quant_group_size: int = 0
-    weight_format: str = "ternary"
-    training_weight_format: str = "ternary"
+    weight_format: str = "binary"
+    training_weight_format: str = "binary"
     metadata: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

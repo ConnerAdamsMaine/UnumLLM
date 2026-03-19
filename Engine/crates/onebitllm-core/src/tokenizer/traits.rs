@@ -83,10 +83,7 @@ mod tests {
         }
 
         fn decode(&self, ids: &[u32]) -> crate::Result<String> {
-            Ok(ids
-                .iter()
-                .filter_map(|&id| char::from_u32(id))
-                .collect())
+            Ok(ids.iter().filter_map(|&id| char::from_u32(id)).collect())
         }
 
         fn vocab_size(&self) -> usize {

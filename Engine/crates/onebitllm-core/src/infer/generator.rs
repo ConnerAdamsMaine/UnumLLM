@@ -1,10 +1,10 @@
 use ndarray::{Array, IxDyn};
 
-use crate::Result;
+use super::sampler::{Sampler, SamplingConfig};
 use crate::error::OneBitError;
 use crate::nn::Module;
 use crate::tokenizer::Tokenizer;
-use super::sampler::{Sampler, SamplingConfig};
+use crate::Result;
 
 /// Configuration for text generation.
 #[derive(Debug, Clone)]
@@ -61,9 +61,8 @@ impl<'a> Generator<'a> {
             // Build input tensor: (1, seq_len)
             let input_f32: Vec<f32> = input_ids.iter().map(|&id| id as f32).collect();
             let seq_len = input_ids.len();
-            let input_tensor =
-                Array::from_shape_vec(IxDyn(&[1, seq_len]), input_f32)
-                    .map_err(|e| OneBitError::Inference(e.to_string()))?;
+            let input_tensor = Array::from_shape_vec(IxDyn(&[1, seq_len]), input_f32)
+                .map_err(|e| OneBitError::Inference(e.to_string()))?;
 
             // Forward pass
             let output = self.model.forward_inference(&input_tensor)?;
@@ -109,10 +108,7 @@ impl<'a> Generator<'a> {
     }
 
     /// Generate tokens as an iterator (streaming).
-    pub fn generate_stream(
-        &self,
-        prompt: &str,
-    ) -> Result<GenerateStream<'_>> {
+    pub fn generate_stream(&self, prompt: &str) -> Result<GenerateStream<'_>> {
         let encoding = self.tokenizer.encode(prompt)?;
         let sampler = Sampler::new(self.config.sampling.clone());
 
@@ -205,7 +201,9 @@ impl Iterator for GenerateStream<'_> {
         };
 
         // Sample
-        let next_token = self.sampler.sample_with_history(&logits, &self.generated_ids);
+        let next_token = self
+            .sampler
+            .sample_with_history(&logits, &self.generated_ids);
 
         // Check stop
         if self.config.stop_tokens.contains(&next_token) {
@@ -239,8 +237,7 @@ mod tests {
             let batch = input.shape()[0];
             let seq_len = input.shape()[1];
             // Return (batch, seq_len, vocab_size) with deterministic logits
-            let mut output =
-                Array::zeros(IxDyn(&[batch, seq_len, self.vocab_size]));
+            let mut output = Array::zeros(IxDyn(&[batch, seq_len, self.vocab_size]));
             // Make token 2 always have the highest logit
             for b in 0..batch {
                 for s in 0..seq_len {
@@ -278,10 +275,7 @@ mod tests {
         }
 
         fn decode(&self, ids: &[u32]) -> Result<String> {
-            Ok(ids
-                .iter()
-                .filter_map(|&id| char::from_u32(id))
-                .collect())
+            Ok(ids.iter().filter_map(|&id| char::from_u32(id)).collect())
         }
 
         fn vocab_size(&self) -> usize {

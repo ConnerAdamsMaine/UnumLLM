@@ -4,9 +4,9 @@
 //! ONNX export requires generating a protobuf-encoded graph, which
 //! is deferred to a future phase when the `onnx` feature is implemented.
 
-use crate::Result;
 use crate::error::OneBitError;
 use crate::nn::Parameter;
+use crate::Result;
 
 /// Placeholder for ONNX export configuration.
 #[derive(Debug, Clone)]
@@ -29,10 +29,7 @@ impl Default for OnnxExportConfig {
 /// Export model parameters to ONNX format.
 ///
 /// **Not yet implemented.** Returns an error explaining the feature is not available.
-pub fn export_onnx(
-    _params: &[&Parameter],
-    _config: &OnnxExportConfig,
-) -> Result<Vec<u8>> {
+pub fn export_onnx(_params: &[&Parameter], _config: &OnnxExportConfig) -> Result<Vec<u8>> {
     Err(OneBitError::Other(
         "ONNX export is not yet implemented. Use SafeTensors or OBM format instead.".into(),
     ))

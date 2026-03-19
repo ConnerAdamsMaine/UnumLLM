@@ -1,8 +1,8 @@
-use std::collections::HashMap;
-use ndarray::{Array, IxDyn};
-use crate::nn::Parameter;
-use crate::autograd::VarId;
 use super::traits::Optimizer;
+use crate::autograd::VarId;
+use crate::nn::Parameter;
+use ndarray::{Array, IxDyn};
+use std::collections::HashMap;
 
 /// Stochastic Gradient Descent with optional momentum.
 ///
@@ -40,13 +40,11 @@ impl Optimizer for Sgd {
         param_ids: &[VarId],
     ) -> crate::Result<()> {
         if params.len() != param_ids.len() {
-            return Err(crate::error::OneBitError::Training(
-                format!(
-                    "params length ({}) != param_ids length ({})",
-                    params.len(),
-                    param_ids.len()
-                ),
-            ));
+            return Err(crate::error::OneBitError::Training(format!(
+                "params length ({}) != param_ids length ({})",
+                params.len(),
+                param_ids.len()
+            )));
         }
 
         for (param, &var_id) in params.iter_mut().zip(param_ids.iter()) {
@@ -60,7 +58,8 @@ impl Optimizer for Sgd {
             };
 
             if self.momentum > 0.0 {
-                let vel = self.velocity
+                let vel = self
+                    .velocity
                     .entry(var_id)
                     .or_insert_with(|| Array::zeros(param.data.raw_dim()));
 
@@ -128,10 +127,7 @@ mod tests {
     #[test]
     fn test_sgd_with_momentum() {
         let mut opt = Sgd::new(0.1, 0.9);
-        let mut param = Parameter::new(
-            "x",
-            Array::from_elem(IxDyn(&[1]), 5.0f32),
-        );
+        let mut param = Parameter::new("x", Array::from_elem(IxDyn(&[1]), 5.0f32));
         let var_id = VarId(0);
 
         // Run several steps with constant gradient
@@ -144,19 +140,18 @@ mod tests {
 
         // With momentum, we should descend faster than vanilla SGD
         // After 50 steps with momentum, param should be well below initial 5.0
-        assert!(param.data[[0]] < 0.0,
+        assert!(
+            param.data[[0]] < 0.0,
             "Momentum SGD should push param below 0, got {}",
-            param.data[[0]]);
+            param.data[[0]]
+        );
     }
 
     #[test]
     fn test_sgd_converges_quadratic() {
         // Minimize f(x) = x^2, grad = 2x
         let mut opt = Sgd::vanilla(0.1);
-        let mut param = Parameter::new(
-            "x",
-            Array::from_elem(IxDyn(&[1]), 3.0f32),
-        );
+        let mut param = Parameter::new("x", Array::from_elem(IxDyn(&[1]), 3.0f32));
         let var_id = VarId(0);
 
         for _ in 0..100 {
@@ -166,17 +161,17 @@ mod tests {
             opt.step(&mut [&mut param], &grads, &[var_id]).unwrap();
         }
 
-        assert!(param.data[[0]].abs() < 1e-6,
-            "Should converge to 0, got {}", param.data[[0]]);
+        assert!(
+            param.data[[0]].abs() < 1e-6,
+            "Should converge to 0, got {}",
+            param.data[[0]]
+        );
     }
 
     #[test]
     fn test_sgd_zero_state() {
         let mut opt = Sgd::new(0.1, 0.9);
-        let mut param = Parameter::new(
-            "x",
-            Array::from_elem(IxDyn(&[1]), 1.0f32),
-        );
+        let mut param = Parameter::new("x", Array::from_elem(IxDyn(&[1]), 1.0f32));
         let var_id = VarId(0);
         let grad = Array::from_elem(IxDyn(&[1]), 1.0f32);
         let mut grads = HashMap::new();

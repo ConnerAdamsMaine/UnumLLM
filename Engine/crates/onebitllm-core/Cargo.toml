@@ -15,9 +15,10 @@ bytemuck = { workspace = true }
 num-traits = { workspace = true }
 log = { workspace = true }
 rayon = { workspace = true, optional = true }
-tokenizers = { version = "0.21", optional = true }
+tokenizers = { version = "0.21", optional = true, features = ["http"] }
 safetensors = { workspace = true, optional = true }
 serde_yaml = { workspace = true, optional = true }
+libloading = { version = "0.8", optional = true }
 
 [dev-dependencies]
 approx = "0.5"
@@ -37,7 +38,7 @@ std = []
 serde = ["dep:serde", "dep:serde_json"]
 rayon = ["dep:rayon"]
 simd = []
-rocm = []
+rocm = ["dep:libloading"]
 tokenizers-hf = ["dep:tokenizers"]
 safetensors-io = ["dep:safetensors", "serde"]
 yaml-config = ["dep:serde_yaml", "serde"]

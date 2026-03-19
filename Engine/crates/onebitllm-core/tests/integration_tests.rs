@@ -8,8 +8,8 @@ use onebitllm_core::error::OneBitError;
 /// Test: quantize -> pack -> unpack -> verify roundtrip.
 #[test]
 fn test_quantize_pack_roundtrip() {
-    use onebitllm_core::quant::ternary::absmean_quantize;
     use onebitllm_core::quant::bitpack::PackedTernary;
+    use onebitllm_core::quant::ternary::absmean_quantize;
 
     let weights = vec![0.5, -0.3, 0.0, 0.8, -0.9, 0.1, -0.05, 0.6];
     let (ternary, gamma) = absmean_quantize(&weights);
@@ -24,14 +24,11 @@ fn test_quantize_pack_roundtrip() {
 /// Test: PackedTensor matmul correctness vs naive f32.
 #[test]
 fn test_packed_tensor_matmul_correctness() {
-    use onebitllm_core::tensor::packed_tensor::PackedTensor;
     use onebitllm_core::quant::scales::QuantConfig;
+    use onebitllm_core::tensor::packed_tensor::PackedTensor;
 
     // Create a small weight matrix
-    let weight_data = vec![
-        1.0, -1.0, 0.0,
-        0.0, 1.0, -1.0,
-    ];
+    let weight_data = vec![1.0, -1.0, 0.0, 0.0, 1.0, -1.0];
     let weight_arr = Array::from_shape_vec(IxDyn(&[2, 3]), weight_data).unwrap();
     let packed = PackedTensor::from_ndarray(&weight_arr, &QuantConfig::per_tensor());
 
@@ -80,8 +77,8 @@ fn test_attention_end_to_end() {
 /// Test: MLP block processes input correctly.
 #[test]
 fn test_mlp_end_to_end() {
-    use onebitllm_core::nn::mlp::MlpBlock;
     use onebitllm_core::nn::activation::ActivationFn;
+    use onebitllm_core::nn::mlp::MlpBlock;
     use onebitllm_core::nn::Module;
     use onebitllm_core::quant::scales::QuantConfig;
 
@@ -94,9 +91,9 @@ fn test_mlp_end_to_end() {
 /// Test: Autograd tape computes gradients for a small network.
 #[test]
 fn test_autograd_gradient_flow() {
+    use onebitllm_core::autograd::ops;
     use onebitllm_core::autograd::tape::Tape;
     use onebitllm_core::autograd::variable::Variable;
-    use onebitllm_core::autograd::ops;
 
     let tape = Tape::new();
 
@@ -178,8 +175,8 @@ fn test_config_io_roundtrip() {
 /// Test: OBM file roundtrip with mixed tensor formats.
 #[test]
 fn test_obm_file_roundtrip() {
-    use onebitllm_core::io::{ModelConfig, ObmFile};
     use onebitllm_core::io::custom::ObmTensor;
+    use onebitllm_core::io::{ModelConfig, ObmFile};
 
     let config = ModelConfig::default();
     let t1 = ObmTensor::from_f32("embed.weight", vec![100, 32], &vec![0.1f32; 3200]);
@@ -191,15 +188,31 @@ fn test_obm_file_roundtrip() {
 
     let loaded = ObmFile::load(std::io::Cursor::new(&buf)).unwrap();
     assert_eq!(loaded.tensors.len(), 2);
-    assert_eq!(loaded.get_tensor("embed.weight").unwrap().as_f32().unwrap().len(), 3200);
-    assert_eq!(loaded.get_tensor("layer0.attn.q.weight").unwrap().as_packed_u64().unwrap().len(), 64);
+    assert_eq!(
+        loaded
+            .get_tensor("embed.weight")
+            .unwrap()
+            .as_f32()
+            .unwrap()
+            .len(),
+        3200
+    );
+    assert_eq!(
+        loaded
+            .get_tensor("layer0.attn.q.weight")
+            .unwrap()
+            .as_packed_u64()
+            .unwrap()
+            .len(),
+        64
+    );
 }
 
 /// Test: Tokenizer encode/decode roundtrip.
 #[test]
 fn test_tokenizer_roundtrip() {
-    use onebitllm_core::tokenizer::Tokenizer;
     use onebitllm_core::tokenizer::bpe::SimpleBpe;
+    use onebitllm_core::tokenizer::Tokenizer;
     use std::collections::HashMap;
 
     let mut vocab = HashMap::new();
@@ -230,8 +243,8 @@ fn test_tokenizer_roundtrip() {
 /// Test: Checkpoint save/load roundtrip.
 #[test]
 fn test_checkpoint_roundtrip() {
-    use onebitllm_core::train::checkpoint::Checkpoint;
     use onebitllm_core::nn::module::Parameter;
+    use onebitllm_core::train::checkpoint::Checkpoint;
 
     let p1 = Parameter::new(
         "layer0.weight",
@@ -268,7 +281,8 @@ fn test_sampler_deterministic() {
     let logits = Array::from_shape_vec(
         IxDyn(&[100]),
         (0..100).map(|i| (i as f32 * 0.1).sin()).collect(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut s1 = Sampler::new(config.clone());
     let mut s2 = Sampler::new(config);
@@ -310,7 +324,9 @@ fn test_error_propagation() {
     assert!(result.is_err());
 
     match result.unwrap_err() {
-        OneBitError::Inference(_) | OneBitError::ShapeMismatch { .. } | OneBitError::TensorOp(_) => {},
+        OneBitError::Inference(_)
+        | OneBitError::ShapeMismatch { .. }
+        | OneBitError::TensorOp(_) => {}
         other => panic!("Unexpected error type: {other:?}"),
     }
 }

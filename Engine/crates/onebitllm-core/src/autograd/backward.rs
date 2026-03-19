@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use ndarray::{Array, IxDyn};
 use super::tape::Tape;
 use super::variable::VarId;
+use ndarray::{Array, IxDyn};
+use std::collections::HashMap;
 
 /// Run the backward pass by traversing tape entries in reverse order.
 ///
@@ -66,14 +66,10 @@ mod tests {
             z_id = tape.alloc_id();
 
             // y = 2 * x: backward: grad_x = 2 * grad_y
-            tape.record(y_id, vec![x_id], |grad| {
-                vec![grad * 2.0]
-            });
+            tape.record(y_id, vec![x_id], |grad| vec![grad * 2.0]);
 
             // z = y + 1: backward: grad_y = grad_z
-            tape.record(z_id, vec![y_id], |grad| {
-                vec![grad.clone()]
-            });
+            tape.record(z_id, vec![y_id], |grad| vec![grad.clone()]);
         }
 
         // Extract tape for backward
@@ -105,14 +101,10 @@ mod tests {
             z_id = tape.alloc_id();
 
             // y1 = x (identity)
-            tape.record(y1_id, vec![x_id], |grad| {
-                vec![grad.clone()]
-            });
+            tape.record(y1_id, vec![x_id], |grad| vec![grad.clone()]);
 
             // y2 = x (identity)
-            tape.record(y2_id, vec![x_id], |grad| {
-                vec![grad.clone()]
-            });
+            tape.record(y2_id, vec![x_id], |grad| vec![grad.clone()]);
 
             // z = y1 + y2
             tape.record(z_id, vec![y1_id, y2_id], |grad| {

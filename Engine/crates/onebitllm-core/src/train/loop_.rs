@@ -3,11 +3,11 @@
 //! Provides a `Trainer` struct that orchestrates the forward pass, backward
 //! pass, and optimizer step for each training iteration.
 
-use std::collections::HashMap;
-use ndarray::{Array, IxDyn};
-use crate::autograd::{Tape, Variable, VarId};
+use crate::autograd::{Tape, VarId, Variable};
 use crate::nn::Parameter;
 use crate::optim::traits::Optimizer;
+use ndarray::{Array, IxDyn};
+use std::collections::HashMap;
 
 /// Configuration for a training run.
 #[derive(Debug, Clone)]
@@ -87,7 +87,10 @@ impl Trainer {
         forward_fn: F,
     ) -> crate::Result<StepResult>
     where
-        F: FnOnce(&std::sync::Arc<std::sync::Mutex<crate::autograd::tape::Tape>>, &[Variable]) -> crate::Result<Variable>,
+        F: FnOnce(
+            &std::sync::Arc<std::sync::Mutex<crate::autograd::tape::Tape>>,
+            &[Variable],
+        ) -> crate::Result<Variable>,
     {
         // 1. Create a fresh tape.
         let tape = Tape::new();
@@ -129,10 +132,7 @@ impl Trainer {
 }
 
 /// Compute the L2 norm of all gradients for the given parameter IDs.
-fn compute_grad_norm(
-    grads: &HashMap<VarId, Array<f32, IxDyn>>,
-    param_ids: &[VarId],
-) -> f32 {
+fn compute_grad_norm(grads: &HashMap<VarId, Array<f32, IxDyn>>, param_ids: &[VarId]) -> f32 {
     let mut norm_sq = 0.0f32;
     for id in param_ids {
         if let Some(g) = grads.get(id) {
@@ -178,19 +178,14 @@ mod tests {
         let mut trainer = Trainer::new(TrainConfig::default());
         assert_eq!(trainer.step_count(), 0);
 
-        let mut param = Parameter::new(
-            "x",
-            Array::from_elem(IxDyn(&[2]), 1.0f32),
-        );
+        let mut param = Parameter::new("x", Array::from_elem(IxDyn(&[2]), 1.0f32));
         let mut opt = Sgd::vanilla(0.1);
 
-        let result = trainer.train_step(
-            &mut [&mut param],
-            &mut opt,
-            |_tape, vars| {
+        let result = trainer
+            .train_step(&mut [&mut param], &mut opt, |_tape, vars| {
                 Ok(ops::sum(&vars[0]))
-            },
-        ).unwrap();
+            })
+            .unwrap();
 
         assert_eq!(trainer.step_count(), 1);
         assert!(result.loss > 0.0);
@@ -210,15 +205,13 @@ mod tests {
         let mut opt = Sgd::vanilla(0.1);
 
         for _ in 0..100 {
-            let _result = trainer.train_step(
-                &mut [&mut param],
-                &mut opt,
-                |_tape, vars| {
+            let _result = trainer
+                .train_step(&mut [&mut param], &mut opt, |_tape, vars| {
                     let x = &vars[0];
                     let x2 = ops::mul(x, x);
                     Ok(ops::sum(&x2))
-                },
-            ).unwrap();
+                })
+                .unwrap();
         }
 
         // Should converge near zero
@@ -232,7 +225,10 @@ mod tests {
         let grads = {
             let mut m = HashMap::new();
             // Gradient with norm = 5.0 (3^2 + 4^2 = 25, sqrt = 5)
-            m.insert(VarId(0), Array::from_shape_vec(IxDyn(&[2]), vec![3.0, 4.0]).unwrap());
+            m.insert(
+                VarId(0),
+                Array::from_shape_vec(IxDyn(&[2]), vec![3.0, 4.0]).unwrap(),
+            );
             m
         };
         let ids = [VarId(0)];
@@ -241,7 +237,9 @@ mod tests {
 
         let clipped = clip_gradients(grads, &ids, 1.0, norm);
         let clipped_norm = compute_grad_norm(&clipped, &ids);
-        assert!((clipped_norm - 1.0).abs() < 1e-4,
-            "Clipped norm should be ~1.0, got {clipped_norm}");
+        assert!(
+            (clipped_norm - 1.0).abs() < 1e-4,
+            "Clipped norm should be ~1.0, got {clipped_norm}"
+        );
     }
 }

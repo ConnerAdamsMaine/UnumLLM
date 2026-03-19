@@ -111,8 +111,8 @@ python generate.py \
 ## Notes
 
 - The Rust CLI and bindings are still incomplete in parts. The Python frontend does not mask that; it just forwards the real Rust output.
-- The Rust CLI now has a real end-to-end path for `architecture = "bigram"` with explicit `fp32` and `ternary` train/save modes, teacher distillation, deployed-model eval, and workload benchmarking. Larger architectures still have validation-only train/generate surfaces.
+- The Rust CLI now has a real end-to-end path for `architecture = "bigram"` with explicit `fp32`, strict `binary`, and `ternary` train/save modes, teacher distillation, deployed-model eval, and workload benchmarking. Larger architectures still have validation-only train/generate surfaces.
 - `train` can now write runnable `.obm` models for the byte-level bigram path. Other architectures still stop after validation.
-- `quantize` can convert bigram `.obm` models between `fp32` and `ternary` weight formats and report conversion/eval drift.
+- `quantize` can convert bigram `.obm` models between `fp32`, strict `binary`, and `ternary` weight formats and report conversion/eval drift.
 - `benchmark` measures cold load, p50/p95/p99 latency, request throughput, and token throughput on real prompts for bigram `.obm` models.
 - The old repo-root Python model/tokenizer/quantization stack was removed on purpose to keep architecture boundaries clear.

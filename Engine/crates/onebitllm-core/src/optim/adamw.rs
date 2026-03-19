@@ -1,8 +1,8 @@
-use std::collections::HashMap;
-use ndarray::{Array, IxDyn};
-use crate::nn::Parameter;
-use crate::autograd::VarId;
 use super::traits::Optimizer;
+use crate::autograd::VarId;
+use crate::nn::Parameter;
+use ndarray::{Array, IxDyn};
+use std::collections::HashMap;
 
 /// AdamW optimizer with decoupled weight decay.
 ///
@@ -53,13 +53,11 @@ impl Optimizer for AdamW {
         param_ids: &[VarId],
     ) -> crate::Result<()> {
         if params.len() != param_ids.len() {
-            return Err(crate::error::OneBitError::Training(
-                format!(
-                    "params length ({}) != param_ids length ({})",
-                    params.len(),
-                    param_ids.len()
-                ),
-            ));
+            return Err(crate::error::OneBitError::Training(format!(
+                "params length ({}) != param_ids length ({})",
+                params.len(),
+                param_ids.len()
+            )));
         }
 
         for (param, &var_id) in params.iter_mut().zip(param_ids.iter()) {
@@ -78,8 +76,14 @@ impl Optimizer for AdamW {
             let t = *step as f32;
 
             // Initialize moments if needed
-            let m = self.m.entry(var_id).or_insert_with(|| Array::zeros(param.data.raw_dim()));
-            let v = self.v.entry(var_id).or_insert_with(|| Array::zeros(param.data.raw_dim()));
+            let m = self
+                .m
+                .entry(var_id)
+                .or_insert_with(|| Array::zeros(param.data.raw_dim()));
+            let v = self
+                .v
+                .entry(var_id)
+                .or_insert_with(|| Array::zeros(param.data.raw_dim()));
 
             // Update biased first moment: m = beta1 * m + (1 - beta1) * grad
             m.zip_mut_with(grad, |mi, &gi| {
@@ -166,10 +170,7 @@ mod tests {
     fn test_adamw_zero_state() {
         let mut opt = AdamW::default_config(0.01);
         let var_id = VarId(0);
-        let mut param = Parameter::new(
-            "x",
-            Array::from_elem(IxDyn(&[2]), 1.0f32),
-        );
+        let mut param = Parameter::new("x", Array::from_elem(IxDyn(&[2]), 1.0f32));
         let grad = Array::from_elem(IxDyn(&[2]), 0.5f32);
         let mut grads = HashMap::new();
         grads.insert(var_id, grad);
@@ -194,10 +195,7 @@ mod tests {
     #[test]
     fn test_adamw_skips_frozen_params() {
         let mut opt = AdamW::default_config(0.1);
-        let mut param = Parameter::frozen(
-            "frozen",
-            Array::from_elem(IxDyn(&[2]), 1.0f32),
-        );
+        let mut param = Parameter::frozen("frozen", Array::from_elem(IxDyn(&[2]), 1.0f32));
         let original = param.data.clone();
         let var_id = VarId(0);
 
@@ -217,14 +215,8 @@ mod tests {
         let mut opt_wd = AdamW::new(0.1, 0.9, 0.999, 1e-8, 0.1);
         let mut opt_no_wd = AdamW::new(0.1, 0.9, 0.999, 1e-8, 0.0);
 
-        let mut param_wd = Parameter::new(
-            "wd",
-            Array::from_elem(IxDyn(&[1]), 5.0f32),
-        );
-        let mut param_no_wd = Parameter::new(
-            "no_wd",
-            Array::from_elem(IxDyn(&[1]), 5.0f32),
-        );
+        let mut param_wd = Parameter::new("wd", Array::from_elem(IxDyn(&[1]), 5.0f32));
+        let mut param_no_wd = Parameter::new("no_wd", Array::from_elem(IxDyn(&[1]), 5.0f32));
         let var_id = VarId(0);
 
         for _ in 0..50 {
@@ -232,8 +224,12 @@ mod tests {
             let mut grads = HashMap::new();
             grads.insert(var_id, grad);
 
-            opt_wd.step(&mut [&mut param_wd], &grads, &[var_id]).unwrap();
-            opt_no_wd.step(&mut [&mut param_no_wd], &grads, &[var_id]).unwrap();
+            opt_wd
+                .step(&mut [&mut param_wd], &grads, &[var_id])
+                .unwrap();
+            opt_no_wd
+                .step(&mut [&mut param_no_wd], &grads, &[var_id])
+                .unwrap();
         }
 
         // With weight decay, the param should be smaller (more regularized)

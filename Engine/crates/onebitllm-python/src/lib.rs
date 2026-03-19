@@ -1,7 +1,7 @@
+mod config;
+mod generate;
 mod model;
 mod tokenizer;
-mod generate;
-mod config;
 
 use pyo3::prelude::*;
 

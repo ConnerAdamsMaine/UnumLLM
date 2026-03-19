@@ -1,6 +1,6 @@
-use crate::Result;
 use crate::error::OneBitError;
-use crate::quant::ternary::{TernaryWeight, absmean_quantize};
+use crate::quant::ternary::{absmean_quantize, TernaryWeight};
+use crate::Result;
 
 /// Number of ternary weights packed per u64 word (2 bits each).
 const WEIGHTS_PER_WORD: usize = 32;
@@ -65,7 +65,11 @@ impl PackedTernary {
     /// Get the ternary weight at the given index.
     #[inline]
     pub fn get(&self, index: usize) -> TernaryWeight {
-        debug_assert!(index < self.len, "index {index} out of bounds (len {})", self.len);
+        debug_assert!(
+            index < self.len,
+            "index {index} out of bounds (len {})",
+            self.len
+        );
         let word_idx = index / WEIGHTS_PER_WORD;
         let bit_idx = (index % WEIGHTS_PER_WORD) * 2;
         let bits = ((self.data[word_idx] >> bit_idx) & 0b11) as u8;
@@ -76,7 +80,11 @@ impl PackedTernary {
     /// Set the ternary weight at the given index.
     #[inline]
     pub fn set(&mut self, index: usize, value: TernaryWeight) {
-        debug_assert!(index < self.len, "index {index} out of bounds (len {})", self.len);
+        debug_assert!(
+            index < self.len,
+            "index {index} out of bounds (len {})",
+            self.len
+        );
         let word_idx = index / WEIGHTS_PER_WORD;
         let bit_idx = (index % WEIGHTS_PER_WORD) * 2;
         // Clear the 2-bit field
@@ -105,7 +113,9 @@ impl PackedTernary {
     /// Unpack and dequantize to f32 with a scale factor.
     /// Each weight becomes scale * {-1, 0, +1}.
     pub fn to_f32_vec(&self, scale: f32) -> Vec<f32> {
-        (0..self.len).map(|i| self.get(i).to_f32() * scale).collect()
+        (0..self.len)
+            .map(|i| self.get(i).to_f32() * scale)
+            .collect()
     }
 
     /// Dot product of packed ternary weights with an f32 input vector.
@@ -411,21 +421,13 @@ mod tests {
         // All weights should be valid ternary
         for i in 0..6 {
             let w = packed.get(i);
-            assert!(
-                w == TernaryWeight::Pos
-                    || w == TernaryWeight::Neg
-                    || w == TernaryWeight::Zero
-            );
+            assert!(w == TernaryWeight::Pos || w == TernaryWeight::Neg || w == TernaryWeight::Zero);
         }
     }
 
     #[test]
     fn test_to_f32_vec() {
-        let weights = vec![
-            TernaryWeight::Pos,
-            TernaryWeight::Neg,
-            TernaryWeight::Zero,
-        ];
+        let weights = vec![TernaryWeight::Pos, TernaryWeight::Neg, TernaryWeight::Zero];
         let packed = PackedTernary::from_ternary_slice(&weights);
         let f32_vec = packed.to_f32_vec(2.0);
         assert_eq!(f32_vec, vec![2.0, -2.0, 0.0]);

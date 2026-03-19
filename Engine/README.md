@@ -13,12 +13,14 @@ OneBitLLM currently provides the core pieces for a Rust-first runtime, but it is
 ## Current Status
 
 - The only working backend in-tree today is CPU.
-- Packed ternary inference paths are implemented in the core tensor/linear layers.
-- CLI `train`, `quantize`, and `generate` now have a real byte-level bigram execution path with explicit `fp32` and `ternary` weight modes.
+- Packed binary and ternary inference paths are implemented in the core tensor/linear layers.
+- CLI `train`, `quantize`, and `generate` now have a real byte-level bigram execution path with explicit `fp32`, `binary`, and `ternary` weight modes.
 - Bigram training supports optional teacher distillation, deterministic seeded step ordering, and deployed-model eval reporting.
-- Bigram quantization stores real packed ternary tensors in `.obm` files and reports conversion drift.
+- Bigram quantization stores real packed binary or ternary tensors in `.obm` files and reports conversion drift.
 - CLI `benchmark` measures cold load, latency percentiles, and throughput on real prompts for bigram `.obm` models.
 - CLI runtime commands now accept `--device cpu|rocm`; `rocm` is feature-gated and currently fails explicitly until HIP kernels are implemented.
+- The core tensor layer now exports a stable 2D packed-weight kernel layout so future HIP kernels can consume packed words, scale layout, and binary equalizer metadata directly.
+- The first HIP entrypoint is now wired for the dense-left packed matmul path; `build.rs` compiles it when `hipcc` is available, and runtime loading can be overridden with `ONEBITLLM_HIP_KERNEL_LIB`.
 - Larger architectures still validate inputs and fail fast because the full transformer-style pipelines are not wired yet.
 - No ROCm/HIP backend exists yet, so MI300X support still requires a real accelerator implementation.
 
@@ -96,8 +98,8 @@ cargo run --bin onebitllm -- train \
   --config /tmp/bigram.json \
   --output /tmp/bigram-out \
   --max-steps 32 \
-  --train-weight-format ternary \
-  --save-weight-format ternary \
+  --train-weight-format binary \
+  --save-weight-format binary \
   --eval-data ../corpora/tinyshakespeare.txt
 
 cargo run --bin onebitllm -- generate \
@@ -157,7 +159,7 @@ Complete documentation is available in the [docs/](docs/) directory:
 
 Key concepts:
 - **Tensors**: Core multi-dimensional arrays with shape and layout information
-- **Quantization**: Conversion of float values to ternary representations
+- **Quantization**: Conversion of float values to packed binary or ternary representations
 - **Modules**: Reusable neural network building blocks
 - **Graph**: Automatic differentiation graph for training
 - **Backend**: Computational backend with SIMD support

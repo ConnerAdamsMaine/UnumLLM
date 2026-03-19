@@ -7,8 +7,8 @@
 
 use std::io::Read;
 
-use crate::Result;
 use crate::error::OneBitError;
+use crate::Result;
 
 const GGUF_MAGIC: u32 = 0x46475547; // "GGUF" in little-endian
 
@@ -145,9 +145,8 @@ fn read_gguf_string<R: Read>(r: &mut R) -> Result<String> {
     let len = u64::from_le_bytes(buf8) as usize;
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
-    String::from_utf8(buf).map_err(|e| {
-        OneBitError::Config(format!("Invalid UTF-8 in GGUF string: {e}"))
-    })
+    String::from_utf8(buf)
+        .map_err(|e| OneBitError::Config(format!("Invalid UTF-8 in GGUF string: {e}")))
 }
 
 /// Read a GGUF typed value.
@@ -157,47 +156,57 @@ fn read_gguf_value<R: Read>(r: &mut R) -> Result<GgufValue> {
     let value_type = u32::from_le_bytes(buf4);
 
     match value_type {
-        0 => { // UINT8
+        0 => {
+            // UINT8
             let mut buf = [0u8; 1];
             r.read_exact(&mut buf)?;
             Ok(GgufValue::Uint8(buf[0]))
         }
-        1 => { // INT8
+        1 => {
+            // INT8
             let mut buf = [0u8; 1];
             r.read_exact(&mut buf)?;
             Ok(GgufValue::Int8(buf[0] as i8))
         }
-        2 => { // UINT16
+        2 => {
+            // UINT16
             let mut buf = [0u8; 2];
             r.read_exact(&mut buf)?;
             Ok(GgufValue::Uint16(u16::from_le_bytes(buf)))
         }
-        3 => { // INT16
+        3 => {
+            // INT16
             let mut buf = [0u8; 2];
             r.read_exact(&mut buf)?;
             Ok(GgufValue::Int16(i16::from_le_bytes(buf)))
         }
-        4 => { // UINT32
+        4 => {
+            // UINT32
             r.read_exact(&mut buf4)?;
             Ok(GgufValue::Uint32(u32::from_le_bytes(buf4)))
         }
-        5 => { // INT32
+        5 => {
+            // INT32
             r.read_exact(&mut buf4)?;
             Ok(GgufValue::Int32(i32::from_le_bytes(buf4)))
         }
-        6 => { // FLOAT32
+        6 => {
+            // FLOAT32
             r.read_exact(&mut buf4)?;
             Ok(GgufValue::Float32(f32::from_le_bytes(buf4)))
         }
-        7 => { // BOOL
+        7 => {
+            // BOOL
             let mut buf = [0u8; 1];
             r.read_exact(&mut buf)?;
             Ok(GgufValue::Bool(buf[0] != 0))
         }
-        8 => { // STRING
+        8 => {
+            // STRING
             Ok(GgufValue::String(read_gguf_string(r)?))
         }
-        9 => { // ARRAY
+        9 => {
+            // ARRAY
             // Read element type and count
             r.read_exact(&mut buf4)?;
             let _elem_type = u32::from_le_bytes(buf4);
@@ -215,17 +224,20 @@ fn read_gguf_value<R: Read>(r: &mut R) -> Result<GgufValue> {
             }
             Ok(GgufValue::Array(values))
         }
-        10 => { // UINT64
+        10 => {
+            // UINT64
             let mut buf8 = [0u8; 8];
             r.read_exact(&mut buf8)?;
             Ok(GgufValue::Uint64(u64::from_le_bytes(buf8)))
         }
-        11 => { // INT64
+        11 => {
+            // INT64
             let mut buf8 = [0u8; 8];
             r.read_exact(&mut buf8)?;
             Ok(GgufValue::Int64(i64::from_le_bytes(buf8)))
         }
-        12 => { // FLOAT64
+        12 => {
+            // FLOAT64
             let mut buf8 = [0u8; 8];
             r.read_exact(&mut buf8)?;
             Ok(GgufValue::Float64(f64::from_le_bytes(buf8)))
@@ -239,19 +251,65 @@ fn read_gguf_value<R: Read>(r: &mut R) -> Result<GgufValue> {
 /// Read a GGUF value of a known type (for array elements).
 fn read_gguf_value_of_type<R: Read>(r: &mut R, type_id: u32) -> Result<GgufValue> {
     match type_id {
-        0 => { let mut buf = [0u8; 1]; r.read_exact(&mut buf)?; Ok(GgufValue::Uint8(buf[0])) }
-        1 => { let mut buf = [0u8; 1]; r.read_exact(&mut buf)?; Ok(GgufValue::Int8(buf[0] as i8)) }
-        2 => { let mut buf = [0u8; 2]; r.read_exact(&mut buf)?; Ok(GgufValue::Uint16(u16::from_le_bytes(buf))) }
-        3 => { let mut buf = [0u8; 2]; r.read_exact(&mut buf)?; Ok(GgufValue::Int16(i16::from_le_bytes(buf))) }
-        4 => { let mut buf = [0u8; 4]; r.read_exact(&mut buf)?; Ok(GgufValue::Uint32(u32::from_le_bytes(buf))) }
-        5 => { let mut buf = [0u8; 4]; r.read_exact(&mut buf)?; Ok(GgufValue::Int32(i32::from_le_bytes(buf))) }
-        6 => { let mut buf = [0u8; 4]; r.read_exact(&mut buf)?; Ok(GgufValue::Float32(f32::from_le_bytes(buf))) }
-        7 => { let mut buf = [0u8; 1]; r.read_exact(&mut buf)?; Ok(GgufValue::Bool(buf[0] != 0)) }
-        8 => { Ok(GgufValue::String(read_gguf_string(r)?)) }
-        10 => { let mut buf = [0u8; 8]; r.read_exact(&mut buf)?; Ok(GgufValue::Uint64(u64::from_le_bytes(buf))) }
-        11 => { let mut buf = [0u8; 8]; r.read_exact(&mut buf)?; Ok(GgufValue::Int64(i64::from_le_bytes(buf))) }
-        12 => { let mut buf = [0u8; 8]; r.read_exact(&mut buf)?; Ok(GgufValue::Float64(f64::from_le_bytes(buf))) }
-        _ => Err(OneBitError::Config(format!("Unknown GGUF array element type: {type_id}"))),
+        0 => {
+            let mut buf = [0u8; 1];
+            r.read_exact(&mut buf)?;
+            Ok(GgufValue::Uint8(buf[0]))
+        }
+        1 => {
+            let mut buf = [0u8; 1];
+            r.read_exact(&mut buf)?;
+            Ok(GgufValue::Int8(buf[0] as i8))
+        }
+        2 => {
+            let mut buf = [0u8; 2];
+            r.read_exact(&mut buf)?;
+            Ok(GgufValue::Uint16(u16::from_le_bytes(buf)))
+        }
+        3 => {
+            let mut buf = [0u8; 2];
+            r.read_exact(&mut buf)?;
+            Ok(GgufValue::Int16(i16::from_le_bytes(buf)))
+        }
+        4 => {
+            let mut buf = [0u8; 4];
+            r.read_exact(&mut buf)?;
+            Ok(GgufValue::Uint32(u32::from_le_bytes(buf)))
+        }
+        5 => {
+            let mut buf = [0u8; 4];
+            r.read_exact(&mut buf)?;
+            Ok(GgufValue::Int32(i32::from_le_bytes(buf)))
+        }
+        6 => {
+            let mut buf = [0u8; 4];
+            r.read_exact(&mut buf)?;
+            Ok(GgufValue::Float32(f32::from_le_bytes(buf)))
+        }
+        7 => {
+            let mut buf = [0u8; 1];
+            r.read_exact(&mut buf)?;
+            Ok(GgufValue::Bool(buf[0] != 0))
+        }
+        8 => Ok(GgufValue::String(read_gguf_string(r)?)),
+        10 => {
+            let mut buf = [0u8; 8];
+            r.read_exact(&mut buf)?;
+            Ok(GgufValue::Uint64(u64::from_le_bytes(buf)))
+        }
+        11 => {
+            let mut buf = [0u8; 8];
+            r.read_exact(&mut buf)?;
+            Ok(GgufValue::Int64(i64::from_le_bytes(buf)))
+        }
+        12 => {
+            let mut buf = [0u8; 8];
+            r.read_exact(&mut buf)?;
+            Ok(GgufValue::Float64(f64::from_le_bytes(buf)))
+        }
+        _ => Err(OneBitError::Config(format!(
+            "Unknown GGUF array element type: {type_id}"
+        ))),
     }
 }
 
@@ -288,7 +346,8 @@ mod tests {
     #[test]
     fn test_gguf_header_basic() {
         let data = build_gguf_bytes(&[
-            ("general.name", 8, {  // type 8 = STRING
+            ("general.name", 8, {
+                // type 8 = STRING
                 let s = "test-model";
                 let mut v = Vec::new();
                 v.extend_from_slice(&(s.len() as u64).to_le_bytes());
@@ -296,7 +355,7 @@ mod tests {
                 // Leak to get a static slice — fine for testing
                 Box::leak(v.into_boxed_slice())
             }),
-            ("general.layers", 4, &42u32.to_le_bytes()),  // type 4 = UINT32
+            ("general.layers", 4, &42u32.to_le_bytes()), // type 4 = UINT32
         ]);
 
         let header = GgufHeader::read(Cursor::new(&data)).unwrap();
@@ -316,8 +375,8 @@ mod tests {
     #[test]
     fn test_gguf_value_types() {
         let data = build_gguf_bytes(&[
-            ("bool_key", 7, &[1u8]),           // BOOL
-            ("float_key", 6, &1.5f32.to_le_bytes()),  // FLOAT32
+            ("bool_key", 7, &[1u8]),                 // BOOL
+            ("float_key", 6, &1.5f32.to_le_bytes()), // FLOAT32
         ]);
 
         let header = GgufHeader::read(Cursor::new(&data)).unwrap();

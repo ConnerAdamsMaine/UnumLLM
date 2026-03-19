@@ -1,8 +1,8 @@
 use ndarray::{Array, Array2, IxDyn};
 
-use crate::Result;
-use crate::error::OneBitError;
 use super::embedding::Embedding;
+use crate::error::OneBitError;
+use crate::Result;
 
 /// Rotary Position Embedding (RoPE).
 ///
@@ -179,7 +179,8 @@ impl LearnedPositionalEmbedding {
     pub fn forward(&self, seq_len: usize) -> Result<Array<f32, IxDyn>> {
         if seq_len > self.max_seq_len {
             return Err(OneBitError::TensorOp(format!(
-                "Sequence length {seq_len} exceeds max {}", self.max_seq_len
+                "Sequence length {seq_len} exceeds max {}",
+                self.max_seq_len
             )));
         }
         let ids: Vec<u32> = (0..seq_len as u32).collect();

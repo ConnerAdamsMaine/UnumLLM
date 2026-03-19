@@ -403,7 +403,9 @@ pub type Result<T> = std::result::Result<T, OneBitError>;
 
 ### Commands
 
-Current status: the Rust CLI validates arguments and reports implementation status, but the end-to-end train, quantize, and generate pipelines are not wired yet.
+Current status: the Rust CLI has real end-to-end support today for the byte-level
+bigram path (`architecture = "bigram"`, `vocab_size = 256`). Other
+architectures still stop after validation.
 
 #### train
 
@@ -412,7 +414,7 @@ onebitllm train [OPTIONS]
 
 OPTIONS:
   --config <FILE>
-  --data <FILE>
+  --data <PATH>
   --output <DIR>
   --epochs <N>
   --batch-size <N>
@@ -422,6 +424,10 @@ OPTIONS:
   --seed <SEED>
   --resume <FILE>
 ```
+
+`--data` and `--eval-data` accept a file or directory. Supported structured
+file inputs are `.csv`, `.json`, `.jsonl`, and `.ndjson`; plain text inputs are
+used directly.
 
 #### quantize
 

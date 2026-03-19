@@ -1,9 +1,9 @@
-pub mod traits;
 pub mod adamw;
-pub mod sgd;
 pub mod scheduler;
+pub mod sgd;
+pub mod traits;
 
-pub use traits::Optimizer;
 pub use adamw::AdamW;
+pub use scheduler::{CosineScheduler, LinearScheduler, LrScheduler, WarmupScheduler};
 pub use sgd::Sgd;
-pub use scheduler::{LrScheduler, CosineScheduler, LinearScheduler, WarmupScheduler};
+pub use traits::Optimizer;

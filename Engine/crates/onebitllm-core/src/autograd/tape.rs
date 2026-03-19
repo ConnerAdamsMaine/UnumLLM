@@ -1,6 +1,6 @@
-use std::sync::{Arc, Mutex};
-use ndarray::{Array, IxDyn};
 use super::variable::VarId;
+use ndarray::{Array, IxDyn};
+use std::sync::{Arc, Mutex};
 
 /// A single entry on the computation tape recording one operation.
 pub(crate) struct TapeEntry {
@@ -98,9 +98,7 @@ mod tests {
         let id0 = t.alloc_id();
         let id1 = t.alloc_id();
         let id2 = t.alloc_id();
-        t.record(id2, vec![id0, id1], |grad| {
-            vec![grad.clone(), grad.clone()]
-        });
+        t.record(id2, vec![id0, id1], |grad| vec![grad.clone(), grad.clone()]);
         assert_eq!(t.len(), 1);
         assert!(!t.is_empty());
     }

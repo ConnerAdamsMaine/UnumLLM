@@ -1,8 +1,8 @@
-pub mod train;
-pub mod quantize;
-pub mod generate;
-pub mod bigram;
 pub mod benchmark;
+pub mod bigram;
+pub mod generate;
+pub mod quantize;
+pub mod train;
 
 use clap::Subcommand;
 
@@ -10,7 +10,7 @@ use clap::Subcommand;
 pub enum Command {
     /// Train a 1-bit quantized model using quantization-aware training.
     Train(train::TrainArgs),
-    /// Quantize an existing FP32 model to ternary weights.
+    /// Quantize an existing FP32 model to packed binary or ternary weights.
     Quantize(quantize::QuantizeArgs),
     /// Generate text from a trained model.
     Generate(generate::GenerateArgs),
