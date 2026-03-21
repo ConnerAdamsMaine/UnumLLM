@@ -8,14 +8,18 @@ The repo-root Python code is now a thin frontend only. It does three jobs:
 
 It does not implement its own model, tokenizer, quantization, training loop, or inference stack anymore.
 
+Tracked datasets were removed from the repo. `dataset/` is now a local cache path populated by installer scripts and ignored by git.
+
 ## Current Python Surface
 
 - `gui.py`: Tkinter frontend for corpus download plus Rust `train`/`generate`
 - `corpus.py`: corpus downloader with preset support
 - `config.py`: Rust model-config module plus config CLI utilities
+- `dataset_installer.py`: shared dataset install/materialization helpers
 - `engine_client.py`: Rust engine module plus engine CLI utilities
 - `train.py`: single wrapper for `onebitllm train`
 - `generate.py`: single wrapper for `onebitllm generate`
+- `scripts/install_dataset.py`: dataset installer CLI plus per-dataset wrapper scripts in `scripts/`
 
 ## Build The Rust Engine
 
@@ -38,6 +42,31 @@ If the CLI is not at the default location, set `ONEBITLLM_ENGINE_BIN=/abs/path/t
 ```bash
 python corpus.py --preset tinyshakespeare
 ```
+
+## Install Datasets
+
+List the supported dataset installers:
+
+```bash
+python scripts/install_dataset.py --list
+```
+
+Common entrypoints:
+
+```bash
+bash scripts/install_oasst1.sh
+bash scripts/install_redpajama.sh --max-shards 32
+bash scripts/install_ultrachat.sh --merge-output dataset/UltraChat/ultrachat.jsonl
+bash scripts/install_the_pile.sh
+bash scripts/install_fineweb2.sh
+```
+
+Notes:
+
+- `oasst1` exports local JSONL chat conversations to `dataset/OASST1/oasst1_export/`.
+- `redpajama` materializes a flattened text corpus to `dataset/RedPajama/train.txt`. Use `--max-shards` or `--max-docs` for smaller local runs.
+- `ultrachat` downloads the released JSONL parts into `dataset/UltraChat/raw/`.
+- `the-pile` and `fineweb-2` clone the upstream pipeline repos into the local dataset cache instead of checking them into git here.
 
 ## Inspect Engine Status
 
@@ -80,6 +109,8 @@ python train.py \
   --num-layers 12 \
   --num-attention-heads 12
 ```
+
+To let the training wrapper materialize RedPajama on demand, pass the sentinel value `redpajama` for `--data` and/or `--eval-data`. The generated files are written under your selected `--output` directory.
 
 Teacher-guided adaptation for the bigram path:
 

@@ -1,4 +1,0 @@
-transformers>=4.19.0
-openprompt
-accelerate
-torchmetrics

@@ -2,9 +2,11 @@
 
 set -euo pipefail
 
+bash scripts/install_redpajama.sh --max-shards "${REDPAJAMA_MAX_SHARDS:-32}"
+
 RUST_LOG="${RUST_LOG:-info}" .venv/bin/python train.py \
   --engine ./Engine/target/release/onebitllm \
-  --data /data/redpajama/train \
+  --data ./dataset/RedPajama/train.txt \
   --output ./output/redpajama-bigram \
   --config-out ./output/redpajama-bigram/model_config.json \
   --architecture bigram \
@@ -33,4 +35,4 @@ RUST_LOG="${RUST_LOG:-info}" .venv/bin/python train.py \
   --seed 42 \
   --train-weight-format ternary \
   --save-weight-format ternary \
-  --eval-data /data/redpajama/valid
+  --eval-data ./dataset/RedPajama/train.txt
